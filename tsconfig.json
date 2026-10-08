@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    // Node.js ESM rules. Every package.json needs "type": "module".
+    "module": "nodenext",
+    // Node 24 supports ES2025. No DOM: packages must not rely on browser globals.
+    "lib": ["es2025"],
+    // TypeScript 6+ loads no @types packages unless they are listed here.
+    "types": ["node"],
+    "strict": true,
+    // arr[i] and record[key] may be undefined.
+    "noUncheckedIndexedAccess": true,
+    // `import type` for types, and only syntax Node can strip (no enum, namespace or parameter properties).
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    // Imports keep their .ts extension. Nothing is emitted: Vitest and Node run the .ts files directly.
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["packages", "tests", "*.ts"]
+}

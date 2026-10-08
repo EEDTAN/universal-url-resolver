@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "formatter": { "indentStyle": "space", "lineWidth": 100 },
+  "linter": {
+    "rules": {
+      "style": {
+        "useNodejsImportProtocol": "error",
+        "noRestrictedGlobals": {
+          "level": "error",
+          "options": {
+            "deniedGlobals": {
+              "fetch": "fetch follows redirects, honours proxy settings and skips the security lookup. Use requestHop from @urlresolve/http-resolver.",
+              "WebSocket": "WebSocket skips the security lookup. Use requestHop from @urlresolve/http-resolver."
+            }
+          }
+        },
+        "noRestrictedImports": {
+          "level": "error",
+          "options": {
+            "paths": {
+              "node:http": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:https": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:http2": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:net": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:tls": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:dns": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:dns/promises": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:dgram": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "node:child_process": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "undici": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json."
+            }
+          }
+        }
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/http-resolver/src/index.ts", "tests/**", "**/*.test.ts"],
+      "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
+    }
+  ]
+}

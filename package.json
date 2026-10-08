@@ -1,0 +1,26 @@
+{
+  "name": "@urlresolve/workspace",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.10.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "build": "pnpm -r --if-present run build",
+    "verify": "pnpm lint && pnpm typecheck && pnpm coverage && pnpm build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "24.19.1",
+    "@vitest/coverage-v8": "5.0.3",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3"
+  }
+}
