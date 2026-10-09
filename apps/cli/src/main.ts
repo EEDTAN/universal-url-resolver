@@ -9,7 +9,10 @@ process.once("SIGINT", () => stop.abort());
 const args = process.argv.slice(2);
 if (args.includes("-i") || args.includes("--interactive")) {
   // Ask for links one after another, reading from the terminal.
-  await interactive(process.stdin, process.stdout, { signal: stop.signal });
+  await interactive(process.stdin, process.stdout, {
+    signal: stop.signal,
+    noBrowser: args.includes("--no-browser"),
+  });
 } else {
   process.exitCode = await run(
     args,

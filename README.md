@@ -1,8 +1,11 @@
 # Universal Shortlink Resolver
 
-[![Resolve a link](https://img.shields.io/badge/%E2%96%B6%20Resolve%20a%20link-run%20on%20GitHub-2ea44f?style=for-the-badge)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/resolve.yml)
+[![Open a terminal in your browser](https://img.shields.io/badge/%E2%96%B6%20Open%20a%20terminal-in%20your%20browser-24292f?style=for-the-badge&logo=github)](https://codespaces.new/EEDTAN/universal-url-resolver)
+[![Resolve one link](https://img.shields.io/badge/or%20resolve%20one%20link-on%20GitHub-2ea44f?style=for-the-badge)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/resolve.yml)
 
-Press the green button above (while signed in as the repo owner), then **Run workflow**, paste a link, and read the result in the run summary. Nothing to install. [More ways to run it.](#run-it-on-github-without-installing-anything)
+**Open a terminal in your browser:** press the dark button (signed in to GitHub). GitHub sets everything up in about a minute; when the terminal is ready, type `pnpm urlresolve -i` and it will ask you for links, one after another. Nothing is installed on your computer. (A web page or a button cannot open a terminal on *your* computer — browsers forbid that — but GitHub can give you one in the cloud.)
+
+**Resolve one link:** press the green button, then **Run workflow**, paste a link, and read the result in the run summary. [More ways to run it.](#ways-to-run-it)
 
 [![CI](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml/badge.svg)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml)
 
@@ -10,9 +13,15 @@ Designed to resolve a broad range of short-link and redirect mechanisms. You giv
 
 **Status:** phase 13 of 13, the end of the planned build. The parts below all work; it is not yet released to npm. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
 
-## Run it on GitHub, without installing anything
+## Ways to run it
 
-On the repository, open the **Actions** tab, choose **Resolve a link**, and press **Run workflow**. Type a link, and the destination, the redirect chain, the security checks and the tracking parameters appear in the run's summary. Tick **use_browser** to open pages that need JavaScript in a real browser (slower). This runs on GitHub's own machines; nothing is installed on yours.
+Every way uses the same engine, so a link resolves the same however you ask.
+
+**A terminal in your browser (GitHub Codespaces).** Press the dark button at the top, or open the repository, click the green **Code** button, then **Codespaces → Create codespace on main**. GitHub builds a small cloud machine (about a minute the first time), then opens a terminal. Type `pnpm urlresolve -i` and paste links one after another. This runs on GitHub, on a free monthly allowance of hours; nothing is installed on your computer. (For a page that truly needs a real browser, the terminal will say so; run `pnpm install-browser` once in the codespace if you want that.)
+
+**One link, from a form (GitHub Actions).** Open the **Actions** tab, choose **Resolve a link**, and press **Run workflow**. Type a link, and the destination, the redirect chain, the security checks and the tracking parameters appear in the run's summary. Tick **use_browser** to open pages that need JavaScript in a real browser (slower). This runs on GitHub's own machines; nothing is installed on yours.
+
+**On your own computer.** See the command line, API and web page below.
 
 ## Command line
 

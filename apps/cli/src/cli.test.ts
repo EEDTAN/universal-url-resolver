@@ -449,4 +449,11 @@ describe("interactive mode", () => {
     expect(s.read()).toContain("Final:");
     expect(s.browser.closed).toBe(1);
   });
+
+  it("makes no browser with noBrowser, for where Chromium is not installed", async () => {
+    const s = session(at("short.test", "/abc"), "");
+    await interactive(s.input, s.output, { lookup, makeBrowser: s.makeBrowser, noBrowser: true });
+    expect(s.read()).toContain("Final:");
+    expect(s.browser).toEqual({ made: 0, closed: 0 });
+  });
 });

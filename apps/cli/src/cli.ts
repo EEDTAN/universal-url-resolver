@@ -220,6 +220,8 @@ export interface InteractiveDeps {
   lookup?: ResolveOptions["lookup"];
   makeBrowser?: () => ClosableBrowserResolver;
   signal?: AbortSignal;
+  /** Never open a browser, for places where Chromium is not installed. Default false. */
+  noBrowser?: boolean;
 }
 
 /**
@@ -233,7 +235,7 @@ export async function interactive(
   deps: InteractiveDeps = {},
 ): Promise<void> {
   const write = (text: string) => output.write(`${text}\n`);
-  const browser = (deps.makeBrowser ?? createBrowserResolver)();
+  const browser = deps.noBrowser ? undefined : (deps.makeBrowser ?? createBrowserResolver)();
   const rl = createInterface({ input });
   // Ctrl-C (which aborts the signal) ends the loop; so does the input running out.
   deps.signal?.addEventListener("abort", () => rl.close());
@@ -250,6 +252,6 @@ export async function interactive(
     }
   } finally {
     rl.close();
-    await browser.close();
+    await browser?.close();
   }
 }
