@@ -1,8 +1,10 @@
 # Universal Shortlink Resolver
 
+[![CI](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml/badge.svg)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml)
+
 Designed to resolve a broad range of short-link and redirect mechanisms. You give it a short link (bit.ly, t.co, a self-hosted shortener, or one nobody has heard of yet) and it tries to find where the link really goes. It uses one generic pipeline instead of a list of known domains. When the destination can't be found safely, the result says so and explains why.
 
-**Status:** work in progress, phase 11 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
+**Status:** work in progress, phase 12 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
 
 ## Command line
 
@@ -89,6 +91,8 @@ Requires Node.js 24 or newer and pnpm 12.
 `pnpm install-browser` downloads the Chromium build Playwright expects, once (about 280 MB on disk). `pnpm verify` runs lint, typecheck, the tests with coverage, and the build. The tests never touch the internet. They run against a local mock server, the browser tests included.
 
 `pnpm test:compat` is the one check that does use the internet. It resolves the real links in `tests/compat/links.json`, without and with a browser, and writes the results with the date to [docs/compatibility.md](docs/compatibility.md). It is not part of `pnpm verify`, because a service can change its pages at any time.
+
+Every push and pull request runs `pnpm verify` and a dependency audit on GitHub Actions (`.github/workflows/ci.yml`), and CodeQL scans the code for security problems (`.github/workflows/codeql.yml`). Each action is pinned to a commit, and Dependabot proposes newer versions once they are a week old.
 
 ## License
 
