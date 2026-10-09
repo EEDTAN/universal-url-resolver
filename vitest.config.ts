@@ -25,6 +25,7 @@ export default defineConfig({
         "packages/adapters/src/**": { 100: true },
         "packages/browser-resolver/src/proxy.ts": { 100: true },
         "apps/api/src/server.ts": { 100: true },
+        "apps/web/src/view.ts": { 100: true },
       },
     },
   },

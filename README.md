@@ -2,7 +2,7 @@
 
 Designed to resolve a broad range of short-link and redirect mechanisms. You give it a short link (bit.ly, t.co, a self-hosted shortener, or one nobody has heard of yet) and it tries to find where the link really goes. It uses one generic pipeline instead of a list of known domains. When the destination can't be found safely, the result says so and explains why.
 
-**Status:** work in progress, phase 10 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`) and as an HTTP API; there is no web page yet.
+**Status:** work in progress, phase 11 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
 
 ## Command line
 
@@ -53,6 +53,15 @@ The server protects itself and the network around it:
 
 Two things are left to whoever runs it. Behind a reverse proxy, set `URLRESOLVE_TRUST_PROXY` to that proxy's address (127.0.0.1, or `loopback`, for a proxy on the same computer), so that the rate limit counts each client and not the proxy. X-Forwarded-For is then believed only from that address. A public server also tells its users whether a host name exists in its DNS and points to a private address (`BLOCKED`) or does not exist at all, which the rate limit only slows down.
 
+## Web page
+
+    pnpm build
+    pnpm api
+
+then open http://127.0.0.1:3000. The page has one box for the link and shows what the spec asks for: the final URL, every host on the way, the security checks, the tracking parameters with the link without them, and the technical details. It is served by the API server, with headers that let it load only its own files and keep other sites from showing it in a frame. The final URL is shown as text, not as a link, so that checking a link never means visiting it.
+
+While working on the page, run `pnpm api` and `pnpm web` side by side and open http://localhost:5173: Vite reloads the page on every change and passes its `/api` calls to the API server.
+
 ## What exists so far
 
 - `packages/types`: the JSON result contract.
@@ -67,6 +76,7 @@ Two things are left to whoever runs it. Behind a reverse proxy, set `URLRESOLVE_
 - `packages/core`: `resolveUrl()` follows the chain with one overall time limit (10 seconds by default) and a limit of 20 redirects of any kind. It detects loops, keeps cookies for the length of one resolution only, and stops at a "verify you are human" page instead of trying to pass it. When the readers find no way on, an adapter that knows the service is asked before the browser. Given a browser (`createBrowserResolver()`), core then hands over the pages the readers above cannot settle, and only those. A resolved result carries the tracking report for its final URL. An optional `log` callback hears every step, tagged `[URL]`, `[HTTP]`, `[REDIRECT]`, `[HTML]`, `[JAVASCRIPT]`, `[BROWSER]`, `[SECURITY]`, `[TRACKING]` or `[FINAL]`; its messages hold URLs without passwords, statuses, methods, adapter names and the names of tracking parameters (encoded again, as in a URL), never a header, a cookie or the text of a page.
 - `apps/cli`: the `urlresolve` command, built on `resolveUrl()`.
 - `apps/api`: the HTTP API (Fastify), built on `resolveUrl()` too.
+- `apps/web`: the web page (React, built with Vite), which only talks to the API.
 
 ## Development
 

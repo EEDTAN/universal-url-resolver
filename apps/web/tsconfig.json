@@ -1,0 +1,12 @@
+{
+  // The page runs in a browser: the DOM instead of Node, and React's JSX.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2025", "dom", "dom.iterable"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx"
+  },
+  "include": ["src", "vite.config.ts"],
+  // The root settings leave this folder out; here it is the whole point.
+  "exclude": []
+}

@@ -17,5 +17,7 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["packages", "apps", "tests", "*.ts"]
+  "include": ["packages", "apps", "tests", "*.ts"],
+  // The web page runs in a browser and has its own settings (apps/web/tsconfig.json).
+  "exclude": ["apps/web"]
 }

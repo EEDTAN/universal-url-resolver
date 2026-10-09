@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request, type ServerResponse } from "node:http";
 import type { AddressInfo, LookupFunction } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { fakeLookup, type Route, startMockServer } from "../../../tests/fixtures/mock-server.ts";
 import { buildServer, type ServerOptions, settingsFromEnv } from "./server.ts";
@@ -74,6 +77,49 @@ describe("GET /api/health", () => {
     expect(reply.statusCode).toBe(200);
     expect(reply.json()).toEqual({ status: "ok" });
     expect(reply.headers["x-ratelimit-limit"]).toBeUndefined();
+  });
+});
+
+describe("the web page", () => {
+  // A stand-in for apps/web/dist.
+  const page = mkdtempSync(join(tmpdir(), "urlresolve-web-"));
+  writeFileSync(join(page, "index.html"), "<!doctype html><p>the page</p>");
+  afterAll(() => rmSync(page, { recursive: true, force: true }));
+
+  it("is served at / when there is one", async () => {
+    const { app } = await api({ webRoot: page });
+    const reply = await app.inject({ method: "GET", url: "/" });
+    expect(reply.statusCode).toBe(200);
+    expect(reply.headers["content-type"]).toContain("text/html");
+    expect(reply.body).toContain("the page");
+    expect((await app.inject({ method: "GET", url: "/api/health" })).json()).toEqual({
+      status: "ok",
+    });
+  });
+
+  it.each(["/../package.json", "/%2e%2e/package.json", "/..%2fpackage.json"])(
+    "serves nothing outside its folder: %s",
+    async (url) => {
+      const { app } = await api({ webRoot: page });
+      expect((await app.inject({ method: "GET", url })).statusCode).toBe(404);
+    },
+  );
+
+  it("is not served when there is none", async () => {
+    const { app } = await api();
+    expect((await app.inject({ method: "GET", url: "/" })).statusCode).toBe(404);
+  });
+
+  it("comes with headers that keep other sites and scripts out, as does every answer", async () => {
+    const { app } = await api({ webRoot: page });
+    for (const url of ["/", "/api/health"]) {
+      expect((await app.inject({ method: "GET", url })).headers).toMatchObject({
+        "content-security-policy":
+          "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+      });
+    }
   });
 });
 

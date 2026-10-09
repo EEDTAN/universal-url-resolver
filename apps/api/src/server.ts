@@ -1,4 +1,5 @@
 import rateLimit, { normalizeIP } from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
 import { type ResolveOptions, resolveUrl } from "@urlresolve/core";
 import { MAX_URL_LENGTH, parseInputUrl } from "@urlresolve/url-parser";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -26,7 +27,18 @@ export interface ServerOptions {
   lookup?: ResolveOptions["lookup"];
   /** Fastify's request log (never the request body). Default false. */
   logger?: boolean;
+  /** A folder with the built web page (apps/web/dist), served at /. Default: none. */
+  webRoot?: string;
 }
+
+// Sent with every answer. The page loads nothing but its own files, and no other site may show
+// it in a frame.
+const SECURITY_HEADERS = {
+  "content-security-policy":
+    "default-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  "referrer-policy": "no-referrer",
+  "x-content-type-options": "nosniff",
+};
 
 /** Links one client may have resolved at the same time, so that no client takes every place. */
 const MAX_PER_CLIENT = 2;
@@ -35,7 +47,8 @@ const MAX_CACHED_SIZE = 16 * 1024;
 
 /**
  * The HTTP API: POST /api/resolve with {"url": "..."} answers with the same result the CLI's
- * --json prints, and GET /api/health with {"status": "ok"}. A link that does not resolve is still
+ * --json prints, and GET /api/health with {"status": "ok"}. Given a webRoot, it also serves the
+ * web page at /. A link that does not resolve is still
  * answered with 200: the status inside says what happened. Other answers: 400 for a body that is
  * not exactly {"url": "<text>"}, 413 for a body over 16 KiB, 415 for one that is neither JSON nor
  * plain text, 429 for a client over the rate limit or with two links already running, and 503
@@ -51,6 +64,7 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     trustProxy,
     lookup,
     logger = false,
+    webRoot,
   } = options;
   const app = Fastify({
     logger,
@@ -63,7 +77,12 @@ export async function buildServer(options: ServerOptions = {}): Promise<FastifyI
     ajv: { customOptions: { coerceTypes: false, removeAdditional: false } },
   });
   app.server.headersTimeout = 10_000;
+  app.addHook("onSend", async (_request, reply) => {
+    reply.headers(SECURITY_HEADERS);
+  });
   await app.register(rateLimit, { global: false });
+  // Only files inside webRoot are served; a path that leads out of it is a 404.
+  if (webRoot !== undefined) await app.register(fastifyStatic, { root: webRoot });
   const cache = new Map<string, { result: Result; expires: number }>();
   const running = new Map<string, number>();
   let active = 0;
