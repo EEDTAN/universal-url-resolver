@@ -191,6 +191,15 @@ importers:
         specifier: 5.0.3
         version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
 
+  apps/cli:
+    dependencies:
+      '@urlresolve/browser-resolver':
+        specifier: workspace:*
+        version: link:../../packages/browser-resolver
+      '@urlresolve/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+
   packages/adapters:
     dependencies:
       '@urlresolve/types':

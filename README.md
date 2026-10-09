@@ -2,7 +2,28 @@
 
 Designed to resolve a broad range of short-link and redirect mechanisms. You give it a short link (bit.ly, t.co, a self-hosted shortener, or one nobody has heard of yet) and it tries to find where the link really goes. It uses one generic pipeline instead of a list of known domains. When the destination can't be found safely, the result says so and explains why.
 
-**Status:** work in progress, phase 8 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). There is no command-line tool, API or web page yet.
+**Status:** work in progress, phase 9 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`); there is no API or web page yet.
+
+## Command line
+
+From a copy of this repository (see Development below for the setup):
+
+    pnpm urlresolve https://bit.ly/example
+    pnpm urlresolve https://bit.ly/example --json
+
+It prints the original and final URL, the status (with the reason when the link did not resolve), the method that found the way, the number of redirects, the time, the tracking parameters and every URL on the way.
+
+| Option | What it does |
+| --- | --- |
+| `--json` | prints the whole result as JSON, for programs |
+| `--verbose`, `-v` | prints every detail of the final URL, and every step as it happens (on stderr, so `--json --verbose` still prints pure JSON) |
+| `--security` | prints what the security checks found |
+| `--clean` | prints the final URL without its tracking parameters |
+| `--no-browser` | never opens a browser, even for a page that needs one |
+| `--timeout <seconds>` | time limit for the whole link (default 10) |
+| `--max-redirects <n>` | most redirects to follow (default 20) |
+
+The exit code is 0 when the link resolved, 1 when it did not, 2 for a mistake in the command, and 130 when it was stopped with Ctrl-C (it prints no report then: a visit cut short says nothing about the link). Text that comes from the link, such as a decoded query parameter, is printed with control and invisible formatting characters escaped, so a link cannot send commands to the terminal.
 
 ## What exists so far
 
@@ -15,7 +36,8 @@ Designed to resolve a broad range of short-link and redirect mechanisms. You giv
 - `packages/tracking`: sorts the query parameters of the final URL into tracking (`utm_*` tags, ad click IDs such as `gclid` and `fbclid`, e-mail IDs such as `mc_eid`), functional (`id`, `q`, `page` and a few more) and unknown ones, and builds a clean URL that leaves out the tracking ones only. Unknown parameters stay, because the page may need them, and the parameters that stay keep their order and exact spelling. Codes that only some sites use for tracking (`ref`, `si`, X's `s`) count as unknown, and so does Marketo's `mkt_tok`, which its unsubscribe pages need.
 - `packages/adapters`: the place for what is known about one particular shortener service, for a page of it that the readers above get wrong. An adapter only says where the page leads next. `resolveUrl()` asks one only about a page on which the readers find no way on, never about an error page or a page it sees asking for human verification, and checks the URL it gives like any redirect. An adapter must only name where the service itself sends the visitor, which a URL in the address does not prove: for a link without a valid `urlhash`, LinkedIn's `/redir/redirect?url=...` answers with a "Link Error" page (HTTP 200) that names the URL but does not go there. There are no built-in adapters yet.
 - `packages/security`: decides which hosts may be contacted. Only public addresses are allowed. Localhost, private networks (10.x, 172.16-31.x, 192.168.x), link-local and cloud metadata addresses, IPv6 private ranges and internal host names are refused, and the check runs again for every redirect, every URL found in a page and every DNS answer.
-- `packages/core`: `resolveUrl()` follows the chain with one overall time limit (10 seconds by default) and a limit of 20 redirects of any kind. It detects loops, keeps cookies for the length of one resolution only, and stops at a "verify you are human" page instead of trying to pass it. When the readers find no way on, an adapter that knows the service is asked before the browser. Given a browser (`createBrowserResolver()`), core then hands over the pages the readers above cannot settle, and only those. A resolved result carries the tracking report for its final URL.
+- `packages/core`: `resolveUrl()` follows the chain with one overall time limit (10 seconds by default) and a limit of 20 redirects of any kind. It detects loops, keeps cookies for the length of one resolution only, and stops at a "verify you are human" page instead of trying to pass it. When the readers find no way on, an adapter that knows the service is asked before the browser. Given a browser (`createBrowserResolver()`), core then hands over the pages the readers above cannot settle, and only those. A resolved result carries the tracking report for its final URL. An optional `log` callback hears every step, tagged `[URL]`, `[HTTP]`, `[REDIRECT]`, `[HTML]`, `[JAVASCRIPT]`, `[BROWSER]`, `[SECURITY]`, `[TRACKING]` or `[FINAL]`; its messages hold URLs without passwords, statuses, methods, adapter names and the names of tracking parameters (encoded again, as in a URL), never a header, a cookie or the text of a page.
+- `apps/cli`: the `urlresolve` command, built on `resolveUrl()`.
 
 ## Development
 

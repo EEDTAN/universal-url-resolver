@@ -1,0 +1,14 @@
+{
+  "name": "universal-url-resolver",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Finds where a short link really goes.",
+  "type": "module",
+  "bin": {
+    "urlresolve": "./src/main.ts"
+  },
+  "dependencies": {
+    "@urlresolve/browser-resolver": "workspace:*",
+    "@urlresolve/core": "workspace:*"
+  }
+}

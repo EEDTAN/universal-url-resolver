@@ -28,6 +28,21 @@ const METHOD_ORDER: ResolveMethod[] = [
   "adapter",
 ];
 
+/** One line of the progress log, such as "[HTTP] 301 https://bit.ly/abc". */
+export interface LogEntry {
+  tag:
+    | "URL"
+    | "SECURITY"
+    | "HTTP"
+    | "REDIRECT"
+    | "HTML"
+    | "JAVASCRIPT"
+    | "BROWSER"
+    | "TRACKING"
+    | "FINAL";
+  message: string;
+}
+
 export interface ResolveOptions {
   /** Time limit for the whole resolution, in milliseconds. Default 10 000. */
   timeoutMs?: number;
@@ -54,6 +69,13 @@ export interface ResolveOptions {
    * list from @urlresolve/adapters. [] turns adapters off.
    */
   adapters?: readonly ShortenerAdapter[];
+  /**
+   * Called for every step as it happens, for a progress log. Messages hold URLs (with any user
+   * name and password already taken out), statuses, methods, the names of tracking parameters
+   * (percent-encoded again, as in a URL) and adapter names, never a header, a cookie or the text
+   * of a page.
+   */
+  log?: (entry: LogEntry) => void;
 }
 
 /**
@@ -70,6 +92,7 @@ export async function resolveUrl(
     lookup = safeLookup,
     browser,
     adapters = builtInAdapters,
+    log = () => {},
   } = options;
   // Node turns a longer timer (about 24.8 days) into 1 ms, which would be a false TIMEOUT.
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
@@ -86,6 +109,7 @@ export async function resolveUrl(
 
   const parsed = parseInputUrl(input);
   if (!parsed.ok) {
+    log({ tag: "FINAL", message: `${parsed.status}: ${parsed.error}` });
     return {
       originalUrl: parsed.safeInput,
       finalUrl: null,
@@ -108,6 +132,8 @@ export async function resolveUrl(
   let credentialsRemoved = parsed.credentialsRemoved;
   const cookies = new CookieJar();
   const requestsSent = new Set<string>();
+  log({ tag: "URL", message: url.href });
+  if (credentialsRemoved) log({ tag: "SECURITY", message: PASSWORD_REMOVED });
 
   const finish = (status: ResolveStatus, error = ""): ResolveResult => {
     const fields = {
@@ -120,16 +146,31 @@ export async function resolveUrl(
     };
     // Keys in the order the JSON output shows them.
     const originalUrl = parsed.url.href;
-    return status === "RESOLVED"
-      ? {
-          originalUrl,
-          finalUrl: url.href,
-          status,
-          ...fields,
-          tracking: analyzeTracking(url),
-          error: null,
-        }
-      : { originalUrl, finalUrl: null, status, ...fields, tracking: null, error };
+    const result: ResolveResult =
+      status === "RESOLVED"
+        ? {
+            originalUrl,
+            finalUrl: url.href,
+            status,
+            ...fields,
+            tracking: analyzeTracking(url),
+            error: null,
+          }
+        : { originalUrl, finalUrl: null, status, ...fields, tracking: null, error };
+    const names = result.tracking?.parameters.flatMap((p) => (p.kind === "tracking" ? p.name : []));
+    if (names?.length) {
+      const count =
+        names.length === 1 ? "1 tracking parameter" : `${names.length} tracking parameters`;
+      // Decoded names can hold any character, a line break included: encoded again, as in a URL.
+      const shown = names.map((name) => encodeURIComponent(name.toWellFormed()));
+      log({ tag: "TRACKING", message: `${count}: ${shown.join(", ")}` });
+    }
+    if (status === "BLOCKED") log({ tag: "SECURITY", message: error });
+    log({
+      tag: "FINAL",
+      message: status === "RESOLVED" ? `RESOLVED ${url.href}` : `${status}: ${error}`,
+    });
+    return result;
   };
 
   for (;;) {
@@ -148,11 +189,13 @@ export async function resolveUrl(
     httpStatus = hop.statusCode;
     method ??= "http";
     cookies.store(url, hop.setCookies);
+    log({ tag: "HTTP", message: `${hop.statusCode} ${url.href}` });
 
     let step = nextStep(hop, url, adapters);
     if (step.kind !== "follow" && step.tryBrowser && browser) {
       // The browser opens this page again, with the cookies this resolution has for it, and
       // follows it to wherever it stays.
+      log({ tag: "BROWSER", message: `opens ${url.href}` });
       const remaining = maxRedirects - (chain.length - 1);
       const visit = await browser.visit(url, {
         signal,
@@ -164,9 +207,11 @@ export async function resolveUrl(
         // Every page the browser went to: only http(s), and never a password.
         const next = resolveLocation(href, url, { inheritFragment: false });
         credentialsRemoved ||= next.credentialsRemoved;
+        if (next.credentialsRemoved) log({ tag: "SECURITY", message: PASSWORD_REMOVED });
         if (!next.ok) return finish(next.status, next.error);
         url = next.url;
         chain.push(url.href);
+        log({ tag: "BROWSER", message: `went to ${url.href}` });
       }
       if (chain.length - 1 > maxRedirects) {
         return revisits(visit.chain)
@@ -194,15 +239,41 @@ export async function resolveUrl(
     // An HTTP redirect passes the #fragment of the link on (RFC 9110); a page's own links do not.
     const next = resolveLocation(step.target, url, { inheritFragment: step.method === "http" });
     credentialsRemoved ||= next.credentialsRemoved;
+    if (next.credentialsRemoved) log({ tag: "SECURITY", message: PASSWORD_REMOVED });
     if (!next.ok) return finish(next.status, next.error);
     url = next.url;
     chain.push(url.href);
+    log(followed(step, url));
   }
 }
 
-/** tryBrowser: a browser may find out where this page goes, which the readers here could not. */
+const PASSWORD_REMOVED = "A user name or password in the URL was taken out";
+
+/** The log line for a step that leads on to `to`. */
+function followed(step: Extract<Step, { kind: "follow" }>, to: URL): LogEntry {
+  switch (step.method) {
+    case "http":
+      return { tag: "REDIRECT", message: `to ${to.href}` };
+    case "meta-refresh":
+      return { tag: "HTML", message: `a refresh leads to ${to.href}` };
+    case "javascript":
+      return { tag: "JAVASCRIPT", message: `a script goes to ${to.href}` };
+    case "adapter":
+      return {
+        tag: "REDIRECT",
+        message: `adapter "${step.adapter}" says the page leads to ${to.href}`,
+      };
+    default:
+      return { tag: "HTML", message: `the page leads to ${to.href}` };
+  }
+}
+
+/**
+ * tryBrowser: a browser may find out where this page goes, which the readers here could not.
+ * adapter: the name of the adapter that gave the target.
+ */
 type Step =
-  | { kind: "follow"; target: string; method: ResolveMethod }
+  | { kind: "follow"; target: string; method: ResolveMethod; adapter?: string }
   | { kind: "stop"; status: Exclude<ResolveStatus, "RESOLVED">; error: string; tryBrowser?: true }
   | { kind: "arrived"; tryBrowser?: true };
 
@@ -241,7 +312,9 @@ function nextStep(
   if (page?.kind === "redirect") return { kind: "follow", target: page.url, method: page.method };
   // The readers found no way on. An adapter may know how this service works.
   const known = askAdapters(adapters, url, hop.html);
-  if (known !== null) return { kind: "follow", target: known, method: "adapter" };
+  if (known !== null) {
+    return { kind: "follow", target: known.target, method: "adapter", adapter: known.name };
+  }
   if (page?.kind === "unknown-script") {
     // The page leaves by itself, so it is not the destination, but where it goes is unknown.
     const error = "JavaScript destination could not be determined";
@@ -258,15 +331,15 @@ function nextStep(
 }
 
 /**
- * The next URL from the first adapter that knows `url`, or null. An adapter whose matches()
- * throws counts as not knowing it; one whose next() throws, or answers with anything but a
- * non-empty string, counts as having no answer.
+ * The next URL from the first adapter that knows `url`, with that adapter's name, or null. An
+ * adapter whose matches() throws counts as not knowing it; one whose next() throws, or answers
+ * with anything but a non-empty string, counts as having no answer.
  */
 function askAdapters(
   adapters: readonly ShortenerAdapter[],
   url: URL,
   html: string | null,
-): string | null {
+): { name: string; target: string } | null {
   // Every call gets a copy of its own, so that no adapter can move the resolution, or steer the
   // adapters after it, by changing the URL it is shown.
   for (const adapter of adapters) {
@@ -279,7 +352,7 @@ function askAdapters(
     if (!knows) continue;
     try {
       const target = adapter.next({ url: new URL(url.href), html });
-      return typeof target === "string" && target !== "" ? target : null;
+      return typeof target === "string" && target !== "" ? { name: adapter.name, target } : null;
     } catch {
       return null;
     }

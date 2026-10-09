@@ -9,7 +9,7 @@ export default defineConfig({
     },
     coverage: {
       // Test files are always left out of coverage.
-      include: ["packages/*/src/**/*.ts"],
+      include: ["packages/*/src/**/*.ts", "apps/*/src/**/*.ts"],
       thresholds: {
         lines: 90,
         functions: 90,
