@@ -1,5 +1,9 @@
 # Universal Shortlink Resolver
 
+[![Resolve a link](https://img.shields.io/badge/%E2%96%B6%20Resolve%20a%20link-run%20on%20GitHub-2ea44f?style=for-the-badge)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/resolve.yml)
+
+Press the green button above (while signed in as the repo owner), then **Run workflow**, paste a link, and read the result in the run summary. Nothing to install. [More ways to run it.](#run-it-on-github-without-installing-anything)
+
 [![CI](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml/badge.svg)](https://github.com/EEDTAN/universal-url-resolver/actions/workflows/ci.yml)
 
 Designed to resolve a broad range of short-link and redirect mechanisms. You give it a short link (bit.ly, t.co, a self-hosted shortener, or one nobody has heard of yet) and it tries to find where the link really goes. It uses one generic pipeline instead of a list of known domains. When the destination can't be found safely, the result says so and explains why.
