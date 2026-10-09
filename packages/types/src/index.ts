@@ -88,6 +88,47 @@ export interface BrowserResolver {
   ): Promise<BrowserVisit>;
 }
 
+/** What an adapter is shown: a page that answered with a 2xx status. */
+export interface AdapterContext {
+  /** The page's URL. A copy of its own: changing it changes nothing for the resolution. */
+  url: URL;
+  /** The page's HTML (at most MAX_HTML_SIZE characters), or null when the answer was not HTML. */
+  html: string | null;
+}
+
+/**
+ * Knowledge about one shortener service, for a page of it on which the generic readers find no
+ * way on. Core asks the first adapter whose matches() is true, and only then: never about a page
+ * the readers can follow, an error page, or a page it sees asking for human verification
+ * (Cloudflare's challenge header, or a CAPTCHA widget or sign-in form in the HTML as served).
+ * The adapter answers with the next URL, and core treats that like any redirect: http(s) only, the
+ * address policy, loop detection and maxRedirects all apply, and the resolution goes on from there.
+ *
+ * Rules for an adapter:
+ * - It never gets past a CAPTCHA, a login or any other human check. Core cannot see one that a
+ *   script puts up, or one on a page that is not HTML, so look at the service's real page in a
+ *   browser: where it asks for a person, next() answers null.
+ * - It answers only with the URL the service itself sends the visitor to next (a link, frame or
+ *   form of the page, or a redirect the service is known to make), never with a URL the page
+ *   merely names or loads (an API, a script), and never with a guess. A URL in the page's own
+ *   address proves nothing: LinkedIn's "Link Error" page names one it does not go to.
+ * - It makes no requests of its own, and it is quick. html is up to 1 MiB written by the page's
+ *   owner, and timeoutMs cannot stop code that never waits, so a slow adapter holds up every
+ *   resolution. Search with indexOf or htmlparser2, never with a pattern that has two .* or .*?
+ *   in it.
+ */
+export interface ShortenerAdapter {
+  /** Short and unique, such as "example-shortener". */
+  name: string;
+  /**
+   * Whether `url` is a page of the service this adapter knows. Quick, with no side effects.
+   * Keep it narrow: core asks again about every page on the way, the destination included.
+   */
+  matches(url: URL): boolean;
+  /** The next URL (absolute, or relative to context.url), or null when this page shows none. */
+  next(context: AdapterContext): string | null;
+}
+
 /**
  * The JSON shown by the CLI, API and web UI. finalUrl and tracking are set exactly when status is
  * "RESOLVED".

@@ -469,6 +469,63 @@ describe("when core asks the browser", () => {
       chain: [at("app.test", "/fetch"), at("app.test", "/web")],
     });
   });
+
+  it("asks an adapter that knows the page first, and needs no browser then", async () => {
+    const { stub, visits } = standIn();
+    const adapter = {
+      name: "app",
+      matches: (url: URL) => url.hostname === "app.test",
+      next: () => at("dest.test", "/"),
+    };
+    expect(await resolve("/fetch", { browser: stub, adapters: [adapter] })).toMatchObject({
+      status: "RESOLVED",
+      method: "adapter",
+      chain: [at("app.test", "/fetch"), at("dest.test", "/")],
+    });
+    expect(visits).toEqual([]);
+  });
+
+  it("asks an adapter about the page the browser stayed on", async () => {
+    const { stub } = standIn((url) => ({
+      ok: true,
+      chain: [url.href, at("app.test", "/shown")],
+      statusCode: 200,
+      challenge: false,
+      refresh: null,
+      html: "<p>a page of the service</p>",
+    }));
+    const adapter = {
+      name: "app",
+      matches: (url: URL) => url.pathname === "/shown",
+      next: () => at("dest.test", "/"),
+    };
+    expect(await resolve("/fetch", { browser: stub, adapters: [adapter] })).toMatchObject({
+      status: "RESOLVED",
+      chain: [at("app.test", "/fetch"), at("app.test", "/shown"), at("dest.test", "/")],
+    });
+  });
+
+  it("still reports the adapter when the browser comes after it", async () => {
+    // The adapter sends the plain page /web to /fetch, which the browser follows to dest.test.
+    const { stub } = standIn(() => ({
+      ok: true,
+      chain: [at("app.test", "/fetch"), at("dest.test", "/")],
+      statusCode: 200,
+      challenge: false,
+      refresh: null,
+      html: "<p>destination</p>",
+    }));
+    const adapter = {
+      name: "app",
+      matches: (url: URL) => url.hostname === "app.test" && url.pathname === "/web",
+      next: () => "/fetch",
+    };
+    expect(await resolve("/web", { browser: stub, adapters: [adapter] })).toMatchObject({
+      status: "RESOLVED",
+      method: "adapter",
+      chain: [at("app.test", "/web"), at("app.test", "/fetch"), at("dest.test", "/")],
+    });
+  });
 });
 
 describe("without a browser", () => {

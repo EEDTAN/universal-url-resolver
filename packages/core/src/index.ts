@@ -1,3 +1,4 @@
+import { adapters as builtInAdapters } from "@urlresolve/adapters";
 import { findHtmlTarget, refreshTarget } from "@urlresolve/html-resolver";
 import { type HopOptions, type HopResult, requestHop } from "@urlresolve/http-resolver";
 import { safeLookup } from "@urlresolve/security";
@@ -7,6 +8,7 @@ import type {
   ResolveMethod,
   ResolveResult,
   ResolveStatus,
+  ShortenerAdapter,
 } from "@urlresolve/types";
 import { parseInputUrl, resolveLocation } from "@urlresolve/url-parser";
 import { CookieJar } from "./cookie-jar.ts";
@@ -46,6 +48,12 @@ export interface ResolveOptions {
    * every connection with its own lookup.
    */
   browser?: BrowserResolver;
+  /**
+   * Knowledge about particular shortener services, asked only about a page on which the readers
+   * above find no way on, and before the browser (see ShortenerAdapter). Default: the built-in
+   * list from @urlresolve/adapters. [] turns adapters off.
+   */
+  adapters?: readonly ShortenerAdapter[];
 }
 
 /**
@@ -61,6 +69,7 @@ export async function resolveUrl(
     maxRedirects = DEFAULT_MAX_REDIRECTS,
     lookup = safeLookup,
     browser,
+    adapters = builtInAdapters,
   } = options;
   // Node turns a longer timer (about 24.8 days) into 1 ms, which would be a false TIMEOUT.
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
@@ -140,7 +149,7 @@ export async function resolveUrl(
     method ??= "http";
     cookies.store(url, hop.setCookies);
 
-    let step = nextStep(hop, url);
+    let step = nextStep(hop, url, adapters);
     if (step.kind !== "follow" && step.tryBrowser && browser) {
       // The browser opens this page again, with the cookies this resolution has for it, and
       // follows it to wherever it stays.
@@ -150,7 +159,7 @@ export async function resolveUrl(
         maxNavigations: remaining,
         cookie: cookies.header(url),
       });
-      method = "browser";
+      method = heavier(method, "browser");
       for (const href of visit.chain.slice(1)) {
         // Every page the browser went to: only http(s), and never a password.
         const next = resolveLocation(href, url, { inheritFragment: false });
@@ -177,7 +186,7 @@ export async function resolveUrl(
       // followed from here, and a script that certainly leaves for a place unknown still ends
       // UNRESOLVED. A page that only may move on counts as arrived: the browser saw it stay.
       const page = { statusCode, location: null, setCookies: [], challenge, refresh, html };
-      step = nextStep({ ok: true, ...page }, url);
+      step = nextStep({ ok: true, ...page }, url, adapters);
     }
     if (step.kind === "arrived") return finish("RESOLVED");
     if (step.kind === "stop") return finish(step.status, step.error);
@@ -206,7 +215,11 @@ const HUMAN_CHECK: Step = {
 const LOOP_ERROR = "The redirects lead back to a URL that was already visited";
 
 /** What one answer means: go on to another URL, stop, or this page is the destination. */
-function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
+function nextStep(
+  hop: Extract<HopResult, { ok: true }>,
+  url: URL,
+  adapters: readonly ShortenerAdapter[],
+): Step {
   // Only a person can pass this check, and getting around it is not this project's job.
   if (hop.challenge) return HUMAN_CHECK;
   if (hop.location !== null) return { kind: "follow", target: hop.location, method: "http" };
@@ -226,6 +239,9 @@ function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
     return { kind: "stop", status: "UNRESOLVED", error };
   }
   if (page?.kind === "redirect") return { kind: "follow", target: page.url, method: page.method };
+  // The readers found no way on. An adapter may know how this service works.
+  const known = askAdapters(adapters, url, hop.html);
+  if (known !== null) return { kind: "follow", target: known, method: "adapter" };
   if (page?.kind === "unknown-script") {
     // The page leaves by itself, so it is not the destination, but where it goes is unknown.
     const error = "JavaScript destination could not be determined";
@@ -239,6 +255,36 @@ function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
     return { kind: "stop", status: "UNRESOLVED", error, tryBrowser };
   }
   return { kind: "arrived", tryBrowser };
+}
+
+/**
+ * The next URL from the first adapter that knows `url`, or null. An adapter whose matches()
+ * throws counts as not knowing it; one whose next() throws, or answers with anything but a
+ * non-empty string, counts as having no answer.
+ */
+function askAdapters(
+  adapters: readonly ShortenerAdapter[],
+  url: URL,
+  html: string | null,
+): string | null {
+  // Every call gets a copy of its own, so that no adapter can move the resolution, or steer the
+  // adapters after it, by changing the URL it is shown.
+  for (const adapter of adapters) {
+    let knows = false;
+    try {
+      knows = adapter.matches(new URL(url.href));
+    } catch {
+      // Only this adapter is out.
+    }
+    if (!knows) continue;
+    try {
+      const target = adapter.next({ url: new URL(url.href), html });
+      return typeof target === "string" && target !== "" ? target : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function heavier(a: ResolveMethod, b: ResolveMethod): ResolveMethod {

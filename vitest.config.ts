@@ -22,6 +22,7 @@ export default defineConfig({
         "packages/js-resolver/src/**": { 100: true },
         "packages/security/src/**": { 100: true },
         "packages/tracking/src/**": { 100: true },
+        "packages/adapters/src/**": { 100: true },
         "packages/browser-resolver/src/proxy.ts": { 100: true },
       },
     },

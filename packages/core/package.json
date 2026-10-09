@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@urlresolve/adapters": "workspace:*",
     "@urlresolve/html-resolver": "workspace:*",
     "@urlresolve/http-resolver": "workspace:*",
     "@urlresolve/security": "workspace:*",
