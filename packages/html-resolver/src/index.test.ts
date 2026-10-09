@@ -371,3 +371,109 @@ describe("findHtmlTarget: any other page", () => {
     expect(performance.now() - started).toBeLessThan(2000);
   });
 });
+
+describe("findHtmlTarget: scripts", () => {
+  const js = (code: string, attributes = "") => `<script${attributes}>${code}</script>`;
+  const toDest = 'location.href = "https://dest.test/js"';
+  const followed = { kind: "redirect", url: "https://dest.test/js", method: "javascript" };
+
+  it.each([
+    [js('location.replace("https://dest.test/js")'), "an inline script"],
+    [js(toDest, ' type=" Text/JavaScript "'), "a type in other letters, with spaces"],
+    [js(toDest, ' type="text/x-javascript"'), "an old type"],
+    [js(toDest, ' language="JavaScript1.2"'), "an old language attribute"],
+    [js(toDest, ' type="module"'), "a module script"],
+    [js(toDest, ' type="module" nomodule'), "a module script marked nomodule, which still runs"],
+    [`<body onload="${toDest.replaceAll('"', "'")}">`, "a body onload attribute"],
+    [
+      `<frameset onload="${toDest.replaceAll('"', "'")}"></frameset>`,
+      "a frameset onload attribute",
+    ],
+    [
+      `${js("function go() { location.href = 'https://dest.test/js'; }")}<body onload="go()">`,
+      "an onload attribute that calls a function from a script",
+    ],
+  ])("follows %s (%s)", (html) => {
+    expect(findHtmlTarget(html, page)).toEqual(followed);
+  });
+
+  it.each([
+    [`<noscript>${js(toDest)}</noscript>`, "a script in <noscript>, which never runs"],
+    [`<template>${js(toDest)}</template>`, "a script in a <template>"],
+    [
+      js(`{"url": "https://dest.test/js", "x": location}`, ' type="application/ld+json"'),
+      "JSON-LD",
+    ],
+    [js(toDest, ' type="text/template"'), "a template script"],
+    [js(toDest, ' type="text/javascript; charset=utf-8"'), "a type with a charset"],
+    [js(toDest, ' language="VBScript"'), "another language"],
+    [js(toDest, " nomodule"), "a script for browsers without modules"],
+    [js(toDest, ' src="/app.js"'), "the text inside a script that loads a file"],
+    [`<p>Wait</p><script>${toDest}`, "a script the page never closes"],
+    [
+      `<div onload="${toDest.replaceAll('"', "'")}"></div>`,
+      "onload on an element that never loads",
+    ],
+    [
+      `<noscript><body onload="${toDest.replaceAll('"', "'")}"></noscript>`,
+      "onload inside <noscript>",
+    ],
+  ])("ignores %s (%s)", (html) => {
+    expect(findHtmlTarget(html, page)).toEqual({ kind: "none" });
+  });
+
+  it("reports a script that leaves the page for a place it cannot work out", () => {
+    expect(findHtmlTarget(js("location.href = pick()"), page)).toEqual({ kind: "unknown-script" });
+  });
+
+  it("resolves a relative script URL against <base href>", () => {
+    const html = `<base href="https://cdn.test/dir/">${js('location.href = "next"')}`;
+    expect(findHtmlTarget(html, page)).toMatchObject({ url: "https://cdn.test/dir/next" });
+  });
+
+  it("does not read the scripts of an error page", () => {
+    expect(findHtmlTarget(js(toDest), page, { onlyHumanCheck: true })).toEqual({ kind: "none" });
+  });
+
+  describe("in order", () => {
+    const leaving = new URL("https://l.example/l.php?u=https%3A%2F%2Fdest.example%2F");
+
+    it("follows a meta refresh before a script", () => {
+      const html = `<meta http-equiv="refresh" content="0;url=/meta">${js(toDest)}`;
+      expect(findHtmlTarget(html, page)).toMatchObject({ url: "https://short.test/meta" });
+    });
+
+    it("follows the single frame of a frameset before its onload script", () => {
+      const html = `<frameset onload="${toDest.replaceAll('"', "'")}"><frame src="/frame"></frameset>`;
+      expect(findHtmlTarget(html, page)).toEqual({
+        kind: "redirect",
+        url: "https://short.test/frame",
+        method: "html",
+      });
+    });
+
+    it("stops at a CAPTCHA before a script", () => {
+      const html = `<div class="g-recaptcha"></div>${js(toDest)}`;
+      expect(findHtmlTarget(html, page)).toEqual({ kind: "human-check" });
+    });
+
+    it('follows the link of a "leaving" page before a script', () => {
+      const html = `<a href="https://dest.example/">Go</a>${js(toDest)}`;
+      expect(findHtmlTarget(html, leaving)).toMatchObject({ url: "https://dest.example/" });
+    });
+
+    it("follows a script before deciding the page waits for a click", () => {
+      const html = `<p>https://dest.example/</p>${js('location.replace("https://dest.example/")')}`;
+      expect(findHtmlTarget(html, leaving)).toEqual({
+        kind: "redirect",
+        url: "https://dest.example/",
+        method: "javascript",
+      });
+    });
+
+    it("prefers 'cannot work out the script' to 'waits for a click'", () => {
+      const html = `<p>https://dest.example/</p>${js("location.href = pick()")}`;
+      expect(findHtmlTarget(html, leaving)).toEqual({ kind: "unknown-script" });
+    });
+  });
+});

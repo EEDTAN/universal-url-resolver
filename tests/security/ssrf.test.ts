@@ -190,6 +190,16 @@ const server = await startMockServer({
   "public.test/out?u=http%3A%2F%2F127.0.0.2%2Fsecret": page(
     () => '<a href="http://127.0.0.2/secret">Continue</a>',
   ),
+  "public.test/script-to-localhost": page(
+    () => `<script>location.replace("http://localhost:${port()}${SECRET}")</script>`,
+  ),
+  "public.test/script-to-private-name": page(
+    () =>
+      `<script>var h = "private.test"; location.href = "http://" + h + ":${port()}${SECRET}";</script>`,
+  ),
+  "public.test/script-go?to=http%3A%2F%2F169.254.169.254%2F": page(
+    () => '<script>location.href = new URLSearchParams(location.search).get("to");</script>',
+  ),
 });
 afterAll(() => server.close());
 
@@ -328,6 +338,24 @@ describe("every URL found in a page goes through the same checks", () => {
       "http://127.0.0.2/secret",
       "127.0.0.2 is a private or reserved address",
       "html",
+    ],
+    [
+      "/script-to-localhost",
+      `http://localhost:{port}${SECRET}`,
+      "localhost is a local or internal host name",
+      "javascript",
+    ],
+    [
+      "/script-to-private-name",
+      `http://private.test:{port}${SECRET}`,
+      "private.test resolves to a private or reserved address",
+      "javascript",
+    ],
+    [
+      "/script-go?to=http%3A%2F%2F169.254.169.254%2F",
+      "http://169.254.169.254/",
+      "169.254.169.254 is a private or reserved address",
+      "javascript",
     ],
   ])("blocks the target of %s", async (path, target, error, method) => {
     const before = server.requests.length;

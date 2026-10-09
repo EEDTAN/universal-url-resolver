@@ -68,6 +68,7 @@ const routes: Record<string, Route> = {
   "meta.test/needs-javascript": html(
     `<noscript>${metaRefresh("0; url=/enable-javascript")}</noscript><script>location="/x"</script>`,
   ),
+  "meta.test/x": ok,
   "meta.test/private": (_req, res) => {
     res.writeHead(302, { location: "/login?next=/private" }).end();
   },
@@ -231,9 +232,12 @@ describe("meta refresh", () => {
     },
   );
 
-  it('does not follow a <noscript> refresh to a "turn on JavaScript" page', async () => {
+  it('goes where the script goes, not to the "turn on JavaScript" page', async () => {
     expect(await resolve(at("meta.test", "/needs-javascript"))).toMatchObject({
-      finalUrl: at("meta.test", "/needs-javascript"),
+      status: "RESOLVED",
+      finalUrl: at("meta.test", "/x"),
+      method: "javascript",
+      chain: [at("meta.test", "/needs-javascript"), at("meta.test", "/x")],
     });
   });
 });

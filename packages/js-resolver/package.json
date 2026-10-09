@@ -1,0 +1,10 @@
+{
+  "name": "@urlresolve/js-resolver",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "acorn": "8.19.0"
+  }
+}

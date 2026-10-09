@@ -1,3 +1,4 @@
+import { findJsTarget } from "@urlresolve/js-resolver";
 import { isHttpUrl } from "@urlresolve/url-parser";
 import { Parser } from "htmlparser2";
 
@@ -22,14 +23,39 @@ const CAPTCHA_CLASSES = ["cf-turnstile", "g-recaptcha", "h-captcha"];
 const WHITESPACE = "\t\n\f\r "; // what HTML calls ASCII whitespace
 const DIGITS = "0123456789";
 
+// <script type="..."> values a browser runs: the HTML standard's JavaScript MIME types, compared
+// whole. Anything else is data or not run at all: JSON-LD, templates, "text/javascript; charset=".
+const SCRIPT_TYPES = new Set([
+  "",
+  "module",
+  "application/ecmascript",
+  "application/javascript",
+  "application/x-ecmascript",
+  "application/x-javascript",
+  "text/ecmascript",
+  "text/javascript",
+  "text/javascript1.0",
+  "text/javascript1.1",
+  "text/javascript1.2",
+  "text/javascript1.3",
+  "text/javascript1.4",
+  "text/javascript1.5",
+  "text/jscript",
+  "text/livescript",
+  "text/x-ecmascript",
+  "text/x-javascript",
+]);
+
 export type HtmlFinding =
   /** The page sends the visitor on to `url` (absolute, not yet checked for safety). */
-  | { kind: "redirect"; url: string; method: "meta-refresh" | "html" }
+  | { kind: "redirect"; url: string; method: "meta-refresh" | "html" | "javascript" }
   /** The page wants a person to prove they are human, or to sign in. */
   | { kind: "human-check" }
+  /** A script leaves the page by itself, but where to could not be worked out without running it. */
+  | { kind: "unknown-script" }
   /** A "you are leaving" page that shows where it leads but has no link there: it waits for a click. */
   | { kind: "needs-click" }
-  /** Nothing found: as far as the HTML shows, this page is the destination. */
+  /** Nothing found: as far as the page shows, it is the destination. */
   | { kind: "none" };
 
 /**
@@ -48,8 +74,9 @@ export function refreshTarget(content: string, page: URL, base: URL = page): str
 }
 
 /**
- * Reads a page that answered without an HTTP redirect, the way a browser with JavaScript turned
- * off sees it, and decides whether it sends the visitor on. In this order:
+ * Reads a page that answered without an HTTP redirect and decides whether it sends the visitor
+ * on. The HTML is read the way a browser with JavaScript turned off sees it; the scripts are read
+ * without running them (see @urlresolve/js-resolver). In this order:
  * 1. a meta refresh, which the browser follows by itself (also one in <noscript> that leaves the
  *    site; one that stays on it leads to a "please turn on JavaScript" page);
  * 2. a CAPTCHA or Turnstile widget, or a sign-in form on a page whose address says where to go
@@ -58,7 +85,9 @@ export function refreshTarget(content: string, page: URL, base: URL = page): str
  * 4. a "you are leaving this site" page: the page's own address names an external URL in a
  *    query parameter (?u=, ?url=, ?q= ...), and the page either links to exactly that URL or
  *    hands the visitor to a redirector on another host whose address names the same URL
- *    (Facebook's warning page does this). If it only shows the URL as text, a click is needed.
+ *    (Facebook's warning page does this);
+ * 5. a script that leaves the page by itself, such as location.replace("...");
+ * 6. a "you are leaving" page that only shows the URL as text: a click is needed.
  * No other link is followed: a page full of links is simply a page.
  * With onlyHumanCheck (an error page, which sends nobody on), only rule 2 is applied.
  */
@@ -79,13 +108,16 @@ export function findHtmlTarget(
   let noscriptDepth = 0;
   let codeDepth = 0; // inside <script> or <style>, whose text is not shown
   let text = "";
+  let script: string | null = null; // the script being read right now
+  const scripts: string[] = [];
   const refreshes: { content: string; base: URL }[] = [];
   const frames: string[] = [];
   const links: string[] = [];
 
   const parser = new Parser({
     ontext(data) {
-      if (named.length > 0 && templateDepth === 0 && codeDepth === 0) text += data;
+      if (script !== null) script += data;
+      else if (named.length > 0 && templateDepth === 0 && codeDepth === 0) text += data;
     },
     onopentag(name, attributes) {
       depth += 1;
@@ -97,6 +129,12 @@ export function findHtmlTarget(
       if (name === "noscript") noscriptDepth += 1;
       if (name === "script" || name === "style") codeDepth += 1;
       if (templateDepth > 0) return; // the content of a <template> is inert in browsers too
+      // A browser that runs scripts never runs one inside <noscript>.
+      if (noscriptDepth === 0) {
+        if (name === "script" && runsInline(attributes)) script = "";
+        const onload = attributes.onload;
+        if ((name === "body" || name === "frameset") && onload) scripts.push(onload);
+      }
       if (name === "base" && !baseFound && attributes.href !== undefined) {
         baseFound = true;
         const url = URL.parse(attributes.href, page.href);
@@ -118,8 +156,13 @@ export function findHtmlTarget(
       if (name === "frame" && source && source !== "about:blank") frames.push(source);
       if (named.length > 0) links.push(...linkValues(name, attributes));
     },
-    onclosetag(name) {
+    onclosetag(name, isImplied) {
       depth -= 1;
+      if (name === "script" && script !== null) {
+        // A script still open where the page ends never runs: the browser waits for </script>.
+        if (!isImplied) scripts.push(script);
+        script = null;
+      }
       if (name === "template" && templateDepth > 0) templateDepth -= 1;
       if (name === "noscript" && noscriptDepth > 0) noscriptDepth -= 1;
       if ((name === "script" || name === "style") && codeDepth > 0) codeDepth -= 1;
@@ -159,6 +202,11 @@ export function findHtmlTarget(
       return { kind: "redirect", url: target.href, method: "html" };
     }
   }
+  const scripted = findJsTarget(scripts, page, base);
+  if (scripted.kind === "redirect") {
+    return { kind: "redirect", url: scripted.url, method: "javascript" };
+  }
+  if (scripted.kind === "unknown") return { kind: "unknown-script" };
   // Shown as the address wrote it, as the URL parser rewrites it, or without the trailing slash.
   const shown = named.flatMap((url) => [url.written, url.href, url.href.replace(/\/$/, "")]);
   if (shown.some((form) => text.includes(form))) return { kind: "needs-click" };
@@ -202,6 +250,16 @@ function parseRefresh(input: string): { delay: number; url: string | null } | nu
     if (end !== -1) url = url.slice(0, end);
   }
   return { delay, url };
+}
+
+/** Whether a browser runs the text inside a <script> with these attributes. */
+function runsInline(attributes: Record<string, string>): boolean {
+  // The type, or for old pages "text/" and the language (language="JavaScript").
+  const language = attributes.language ? `text/${attributes.language}` : "";
+  const type = (attributes.type ?? language).trim().toLowerCase();
+  if (!SCRIPT_TYPES.has(type)) return false;
+  // With src the browser runs that file instead. nomodule is for browsers without modules.
+  return attributes.src === undefined && (type === "module" || attributes.nomodule === undefined);
 }
 
 function isHumanCheck(name: string, attributes: Record<string, string>): boolean {

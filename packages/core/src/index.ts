@@ -165,6 +165,11 @@ function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
     return { kind: "stop", status: "UNRESOLVED", error };
   }
   if (page?.kind === "redirect") return { kind: "follow", target: page.url, method: page.method };
+  if (page?.kind === "unknown-script") {
+    // The page leaves by itself, so it is not the destination, but where it goes is unknown.
+    const error = "JavaScript destination could not be determined";
+    return { kind: "stop", status: "UNRESOLVED", error };
+  }
   if (page?.kind === "needs-click") {
     // Not the destination, but it only goes on when a person clicks (with JavaScript).
     const error = "The page asks for a click to continue to another site";

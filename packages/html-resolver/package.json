@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@urlresolve/js-resolver": "workspace:*",
     "@urlresolve/url-parser": "workspace:*",
     "htmlparser2": "12.0.0"
   }
