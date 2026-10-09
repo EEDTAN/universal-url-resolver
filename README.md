@@ -16,8 +16,11 @@ On the repository, open the **Actions** tab, choose **Resolve a link**, and pres
 
 ## Command line
 
-From a copy of this repository (see Development below for the setup):
+On Windows, the simplest way is to **double-click `resolve.cmd`** in the project folder: a terminal opens, asks for a link, shows where it goes, and asks again. (You can right-click it → **Send to → Desktop** to make a shortcut.)
 
+The same loop from any terminal, and a single link:
+
+    pnpm urlresolve -i                      # ask for links one after another
     pnpm urlresolve https://bit.ly/example
     pnpm urlresolve https://bit.ly/example --json
 

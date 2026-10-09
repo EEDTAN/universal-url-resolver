@@ -1,3 +1,5 @@
+import { createInterface } from "node:readline/promises";
+import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import { type ClosableBrowserResolver, createBrowserResolver } from "@urlresolve/browser-resolver";
 import {
@@ -18,6 +20,7 @@ Options:
   --verbose, -v        print every detail, and every step as it happens (on stderr)
   --security           print what the security checks found
   --clean              print the final URL without its tracking parameters
+  --interactive, -i    ask for links one after another, in a loop
   --no-browser         never open a browser, even for a page that needs one
   --timeout <seconds>  time limit for the whole link (default ${DEFAULT_TIMEOUT_MS / 1000})
   --max-redirects <n>  most redirects to follow (default ${DEFAULT_MAX_REDIRECTS})
@@ -210,4 +213,43 @@ export function report(
     row("User info removed", result.security.credentialsRemoved ? "yes" : "no", "  ");
   }
   return lines.join("\n");
+}
+
+/** What `interactive` needs: the same lookup and browser-maker as run(), and a stop signal. */
+export interface InteractiveDeps {
+  lookup?: ResolveOptions["lookup"];
+  makeBrowser?: () => ClosableBrowserResolver;
+  signal?: AbortSignal;
+}
+
+/**
+ * Asks for one link after another and prints where each one goes, until an empty line (or Ctrl-C).
+ * `input` and `output` are the streams to read from and write to (the terminal, or test streams).
+ * One browser is made for the whole session and closed at the end.
+ */
+export async function interactive(
+  input: Readable,
+  output: Writable,
+  deps: InteractiveDeps = {},
+): Promise<void> {
+  const write = (text: string) => output.write(`${text}\n`);
+  const browser = (deps.makeBrowser ?? createBrowserResolver)();
+  const rl = createInterface({ input });
+  // Ctrl-C (which aborts the signal) ends the loop; so does the input running out.
+  deps.signal?.addEventListener("abort", () => rl.close());
+  write("Universal URL Resolver");
+  write("Paste a short link and press Enter. Press Enter on an empty line to quit.");
+  output.write("\nLink> ");
+  try {
+    for await (const typed of rl) {
+      const line = typed.trim();
+      if (line === "") break;
+      const result = await resolveUrl(line, { browser, lookup: deps.lookup, signal: deps.signal });
+      write(report(result, { security: true }));
+      output.write("\nLink> ");
+    }
+  } finally {
+    rl.close();
+    await browser.close();
+  }
 }

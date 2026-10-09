@@ -1,8 +1,9 @@
 import type { LookupFunction } from "node:net";
+import { Readable, Writable } from "node:stream";
 import { resolveUrl } from "@urlresolve/core";
 import { afterAll, describe, expect, it } from "vitest";
 import { fakeLookup, type Route, startMockServer } from "../../../tests/fixtures/mock-server.ts";
-import { json, report, run, USAGE, visible } from "./cli.ts";
+import { interactive, json, report, run, USAGE, visible } from "./cli.ts";
 
 // Written as code points, so that this file holds none of them itself.
 const BEL = String.fromCodePoint(0x07);
@@ -401,5 +402,51 @@ describe("visible and json", () => {
     const text = out.join("");
     expect(hasRaw(text)).toBe(false);
     expect(JSON.parse(text).tracking.parameters[0].value).toBe(`${ESC}[2J${RLO}`);
+  });
+});
+
+describe("interactive mode", () => {
+  function session(...typed: string[]) {
+    const input = new Readable({ read() {} });
+    input.push(typed.map((line) => `${line}\n`).join(""));
+    input.push(null); // the input ends here
+    let out = "";
+    const output = new Writable({
+      write(chunk, _enc, done) {
+        out += chunk;
+        done();
+      },
+    });
+    const browser = { made: 0, closed: 0 };
+    const makeBrowser = () => {
+      browser.made += 1;
+      return {
+        visit: async () => {
+          throw new Error("no page in these tests needs a browser");
+        },
+        close: async () => {
+          browser.closed += 1;
+        },
+      };
+    };
+    return { input, output, makeBrowser, browser, read: () => out };
+  }
+
+  it("asks for links in a loop and stops on an empty line", async () => {
+    const s = session(at("short.test", "/abc"), at("short.test", "/gone"), "");
+    await interactive(s.input, s.output, { lookup, makeBrowser: s.makeBrowser });
+    const out = s.read();
+    expect(out).toContain("Universal URL Resolver");
+    expect(out).toContain(`Final:      ${at("short.test", "/page?id=1&utm_source=x")}`);
+    expect(out).toContain("Status:     UNRESOLVED"); // the /gone link
+    // One browser for the whole session, closed at the end.
+    expect(s.browser).toEqual({ made: 1, closed: 1 });
+  });
+
+  it("stops and closes the browser when the input ends", async () => {
+    const s = session(at("short.test", "/abc"));
+    await interactive(s.input, s.output, { lookup, makeBrowser: s.makeBrowser });
+    expect(s.read()).toContain("Final:");
+    expect(s.browser.closed).toBe(1);
   });
 });
