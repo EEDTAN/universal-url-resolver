@@ -1,0 +1,58 @@
+name: Resolve a link
+
+# Run it by hand from the Actions tab: type a link, read the result in the run summary.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: The short link to resolve
+        required: true
+        type: string
+      use_browser:
+        description: Open pages that need JavaScript in a real browser (slower)
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    name: Resolve the link
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Install Chromium
+        if: inputs.use_browser
+        run: |
+          pnpm --filter @urlresolve/browser-resolver exec playwright-core install --with-deps --only-shell chromium
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Resolve
+        # The link goes through an environment variable, always quoted, so it can never run as a
+        # command on the runner.
+        env:
+          URL: ${{ inputs.url }}
+          USE_BROWSER: ${{ inputs.use_browser }}
+        run: |
+          flags="--no-browser"
+          if [ "$USE_BROWSER" = "true" ]; then flags=""; fi
+          node apps/cli/src/main.ts "$URL" --verbose $flags > report.txt 2> log.txt || true
+          if [ ! -s report.txt ]; then cp log.txt report.txt; fi
+          {
+            echo "## Result"
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

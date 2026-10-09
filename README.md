@@ -6,6 +6,10 @@ Designed to resolve a broad range of short-link and redirect mechanisms. You giv
 
 **Status:** phase 13 of 13, the end of the planned build. The parts below all work; it is not yet released to npm. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
 
+## Run it on GitHub, without installing anything
+
+On the repository, open the **Actions** tab, choose **Resolve a link**, and press **Run workflow**. Type a link, and the destination, the redirect chain, the security checks and the tracking parameters appear in the run's summary. Tick **use_browser** to open pages that need JavaScript in a real browser (slower). This runs on GitHub's own machines; nothing is installed on yours.
+
 ## Command line
 
 From a copy of this repository (see Development below for the setup):
