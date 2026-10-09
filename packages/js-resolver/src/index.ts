@@ -4,6 +4,7 @@ import {
   type BlockStatement,
   type CallExpression,
   type IfStatement,
+  type NewExpression,
   type ObjectExpression,
   type Program,
   parse,
@@ -29,7 +30,84 @@ const MAX_TIMER_DELAY_MS = 60_000;
 // Calls that run the function they get after the page has loaded, or after a delay.
 const TIMERS = new Set(["setTimeout", "setInterval", "requestAnimationFrame", "queueMicrotask"]);
 const LOAD_EVENTS = new Set(["load", "DOMContentLoaded", "pageshow"]);
+// Methods that give a function to an event: the name of the event decides when it runs.
+const EVENT_METHODS = new Set([
+  "addEventListener",
+  "removeEventListener",
+  "attachEvent",
+  "detachEvent",
+  "on",
+  "off",
+  "one",
+  "bind",
+  "unbind",
+  "delegate",
+  "undelegate",
+  "live",
+  "die",
+]);
+// Events that only a person causes, or leaving the page. A handler for one never runs by itself.
+// jQuery also has methods of these names: $("#b").click(fn).
+const USER_EVENTS = new Set([
+  "click",
+  "dblclick",
+  "auxclick",
+  "contextmenu",
+  "mousedown",
+  "mouseup",
+  "mousemove",
+  "mouseover",
+  "mouseout",
+  "mouseenter",
+  "mouseleave",
+  "hover",
+  "keydown",
+  "keyup",
+  "keypress",
+  "focus",
+  "blur",
+  "focusin",
+  "focusout",
+  "change",
+  "input",
+  "select",
+  "submit",
+  "reset",
+  "scroll",
+  "wheel",
+  "resize",
+  "touchstart",
+  "touchend",
+  "touchmove",
+  "touchcancel",
+  "pointerdown",
+  "pointerup",
+  "pointermove",
+  "pointerover",
+  "pointerout",
+  "pointerenter",
+  "pointerleave",
+  "pointercancel",
+  "drag",
+  "dragstart",
+  "dragend",
+  "dragenter",
+  "dragleave",
+  "dragover",
+  "drop",
+  "copy",
+  "cut",
+  "paste",
+  "toggle",
+  "beforeunload",
+  "unload",
+  "pagehide",
+  "visibilitychange",
+]);
 const WINDOW_NAMES = new Set(["window", "self", "top", "parent", "frames", "globalThis"]);
+const COMPARISONS = new Set(["===", "!==", "==", "!=", "<", ">", "<=", ">="]);
+// Code that mentions none of these never moves the page on by itself.
+const MENTIONS = /location|open\s*\(|[sS]ubmit|click|eval|Function/;
 // Methods that change the array, URLSearchParams or map they are called on.
 const CHANGING_METHODS = new Set([
   "set",
@@ -80,6 +158,13 @@ export type JsFinding =
   | { kind: "redirect"; url: string }
   /** They certainly leave the page by themselves, but where to could not be worked out. */
   | { kind: "unknown" }
+  /**
+   * Nothing certain, but the scripts may still move on in a way only running them shows: a
+   * redirect in a function given to code the analysis does not know (fetch().then, $.ajax), a
+   * reload (after setting a cookie, say), a form they submit or a link they click, or code they
+   * build while running (eval, new Function).
+   */
+  | { kind: "maybe" }
   | { kind: "none" };
 
 /**
@@ -93,8 +178,8 @@ export type JsFinding =
  * query string (URLSearchParams) and a few string methods. Relative URLs use `base`.
  */
 export function findJsTarget(scripts: string[], page: URL, base: URL = page): JsFinding {
-  // Most pages never mention location: no need to parse anything.
-  if (!scripts.some((script) => /location|open\s*\(/.test(script))) return { kind: "none" };
+  // Most pages never mention any of these: no need to parse anything.
+  if (!scripts.some((script) => MENTIONS.test(script))) return { kind: "none" };
   try {
     return analyse(scripts, page, base);
   } catch (error) {
@@ -116,8 +201,11 @@ function analyse(scripts: string[], page: URL, base: URL): JsFinding {
 
   const targets = new Set<string>();
   let unknown = false;
+  let maybe = code.mayActOnItsOwn();
   for (const sink of code.sinks) {
-    if (!code.redirectsOnLoad(sink.at)) continue;
+    const certain = code.redirectsOnLoad(sink.at);
+    if (!certain && !code.mayRedirect(sink.at)) continue;
+    if (code.ruledOut(sink.at)) continue; // if (location.hostname === "other.example") ...
     if (sink.open) {
       const name = sink.open.windowName && code.evaluate(sink.open.windowName);
       if (name !== "_self" && name !== "_top" && name !== "_parent") continue; // a new window
@@ -125,15 +213,22 @@ function analyse(scripts: string[], page: URL, base: URL): JsFinding {
     const text = sink.target === undefined ? null : code.asText(code.evaluate(sink.target));
     const url = text === null ? null : URL.parse(text, base.href);
     if (url === null) {
-      unknown = true;
-      continue;
+      if (certain) unknown = true;
+      else maybe = true;
+    } else if (withoutFragment(url) === withoutFragment(page)) {
+      // A jump to a #section stays on the page. The page itself again is a reload, which only
+      // changes anything when the page set a cookie or the like first.
+      if (url.hash === "") maybe = true;
+    } else if (certain) {
+      targets.add(url.href);
+    } else {
+      maybe = true;
     }
-    // Sending the page to itself is a reload, or a frame breaking out of its frameset.
-    if (withoutFragment(url) !== withoutFragment(page)) targets.add(url.href);
   }
   const [only] = targets;
   if (only !== undefined && targets.size === 1 && !unknown) return { kind: "redirect", url: only };
-  return targets.size > 0 || unknown ? { kind: "unknown" } : { kind: "none" };
+  if (targets.size > 0 || unknown) return { kind: "unknown" };
+  return maybe ? { kind: "maybe" } : { kind: "none" };
 }
 
 /** Everything the analysis knows about a page's scripts, built by reading their syntax trees. */
@@ -148,7 +243,17 @@ class PageScripts {
   readonly #functions = new Map<string, AnyNode[]>();
   readonly #references = new Map<string, AnyNode[]>();
   readonly #allFunctions: AnyNode[] = [];
+  /** setTimeout and eval calls given code rather than a function. */
   readonly #timerCalls: { call: CallExpression; code: AnyNode }[] = [];
+  /**
+   * Calls whose effect only running the page shows: form.submit(), link.click(), and eval or
+   * Function of text that cannot be worked out or that moves the page on.
+   */
+  readonly #opaque: AnyNode[] = [];
+  /** Function(...) and new Function(...), which make a function from text. */
+  readonly #builders: (CallExpression | NewExpression)[] = [];
+  /** location.reload() calls. */
+  readonly #reloads: AnyNode[] = [];
   /** Statements with a return or throw inside, other than in a function of its own. */
   readonly #exits = new Set<AnyNode>();
   // Answers worked out from the code read so far, kept because the same questions come up again.
@@ -157,8 +262,11 @@ class PageScripts {
   readonly #eitherWay = new Map<AnyNode, boolean>();
   readonly #counters = new Map<string, boolean>();
   readonly #timerFunctions = new Map<AnyNode, boolean>();
-  /** The functions the page runs by itself, worked out once every script has been read. */
-  #running: Set<AnyNode> | undefined;
+  /**
+   * The functions the page runs by itself (running), and the ones code the analysis does not know
+   * may run (maybe). Worked out once every script has been read.
+   */
+  #flow: { running: Set<AnyNode>; maybe: Set<AnyNode> } | undefined;
   #steps = 0;
 
   constructor(page: URL) {
@@ -193,22 +301,33 @@ class PageScripts {
     ]) {
       answers.clear();
     }
-    this.#running = undefined;
+    this.#flow = undefined;
   }
 
   /**
-   * setTimeout("location.href = '...'", 1000): the string is code, so it is read as a script.
-   * Such code can start timers of its own; the loop sees those too, up to MAX_SNIPPETS in all.
+   * setTimeout("location.href = '...'", 1000) and eval("..."): the string is code, so it is read
+   * as a script. Such code can start timers of its own; the loop sees those too, up to
+   * MAX_SNIPPETS in all. eval of text that cannot be worked out is code only running it shows,
+   * and so is Function(...) with such text; Function("return this") is a common way to reach
+   * the global object, nothing more.
    */
   addTimerCode(): void {
     let snippets = 0;
     for (const timer of this.#timerCalls) {
       if (this.#waitsLong(timer.call)) continue;
       const code = this.evaluate(timer.code);
-      if (typeof code !== "string") continue;
-      if (snippets === MAX_SNIPPETS) return;
+      if (typeof code !== "string") {
+        if (!isTimer(timer.call)) this.#opaque.push(timer.call);
+        continue;
+      }
+      if (snippets === MAX_SNIPPETS) break;
       snippets += 1;
       this.add(code, timer.call);
+    }
+    for (const call of this.#builders) {
+      const text = call.arguments.map((argument) => this.evaluate(argument));
+      const known = text.every((part) => typeof part === "string");
+      if (!known || MENTIONS.test(text.join(" "))) this.#opaque.push(call);
     }
   }
 
@@ -295,11 +414,19 @@ class PageScripts {
           this.#changed(callee);
         }
         const first = node.arguments[0];
-        if (isTimer(node) && first && !isFunction(first)) {
+        if ((isTimer(node) || isEval(node)) && first && !isFunction(first)) {
           this.#timerCalls.push({ call: node, code: first });
         }
+        if (isOpaqueCall(node)) this.#opaque.push(node);
+        if (isReload(node)) this.#reloads.push(node);
+        if (callee.type === "Identifier" && callee.name === "Function") this.#builders.push(node);
         break;
       }
+      case "NewExpression":
+        if (node.callee.type === "Identifier" && node.callee.name === "Function") {
+          this.#builders.push(node);
+        }
+        break;
       case "Identifier":
         this.#add(this.#references, node.name, node);
         break;
@@ -310,11 +437,20 @@ class PageScripts {
     this.#add(this.#definitions, name, value);
   }
 
-  /** obj.url = ..., list[0] = ..., u.searchParams.set(...): `obj`, `list` or `u` has changed. */
+  /**
+   * obj.url = ..., list[0] = ..., u.searchParams.set(...): `obj`, `list` or `u` has changed.
+   * window.go = ... changes the global `go` as well.
+   */
   #changed(target: AnyNode): void {
-    let root = target;
-    while (root.type === "MemberExpression") root = root.object;
-    if (root !== target && root.type === "Identifier") this.#define(root.name, null);
+    let member = target;
+    while (member.type === "MemberExpression" && member.object.type === "MemberExpression") {
+      member = member.object;
+    }
+    if (member.type !== "MemberExpression" || member.object.type !== "Identifier") return;
+    const root = member.object.name;
+    this.#define(root, null);
+    const name = propertyName(member);
+    if (WINDOW_NAMES.has(root) && name !== undefined) this.#define(name, null);
   }
 
   #add<K, T>(map: Map<K, T[]>, key: K, value: T): void {
@@ -339,8 +475,90 @@ class PageScripts {
    * then each way out is one of the page's destinations. Asked once every script is added.
    */
   redirectsOnLoad(node: AnyNode): boolean {
-    this.#running ??= this.#findRunning();
+    this.#knownFlow();
     return this.#runs(node, true);
+  }
+
+  /**
+   * Whether the redirect at `node` sits in a function that code the analysis does not know may
+   * call (see #handedTo). Tests inside that function do not matter: `.then((d) => { if (d.url)
+   * location.href = d.url; })` is the usual shape.
+   */
+  mayRedirect(node: AnyNode): boolean {
+    const fn = this.#enclosing(node);
+    return fn !== null && this.#knownFlow().maybe.has(fn);
+  }
+
+  /**
+   * Whether code that runs, or may run, submits a form, clicks, builds code from text (see
+   * #opaque) or reloads the page. A test around it does not matter, except for a reload: the
+   * same page comes back, so it only matters when nothing decides it (the page set a cookie
+   * first, say) or when a test of document.cookie does, the way a cookie check works: set the
+   * cookie and reload, unless it is there already. A reload after a while of nothing happening,
+   * or when the page comes back from the history, does not change where a link goes.
+   */
+  mayActOnItsOwn(): boolean {
+    const flow = this.#knownFlow();
+    const mayRun = (node: AnyNode) => {
+      const fn = this.#enclosing(node);
+      const runs = fn === null || flow.running.has(fn) || flow.maybe.has(fn);
+      return runs && !this.ruledOut(node);
+    };
+    if (this.#opaque.some(mayRun)) return true;
+    return this.#reloads.some(
+      (reload) => mayRun(reload) && (this.#runs(reload) || this.#afterCookieTest(reload)),
+    );
+  }
+
+  /**
+   * A test of document.cookie comes before the code at `node`: a test around it, or any earlier
+   * if statement in the same block (a cookie check often returns early). Only within the
+   * function the code is in.
+   */
+  #afterCookieTest(node: AnyNode): boolean {
+    const readsCookie = (test: AnyNode) => [...walk(test)].some(([part]) => isCookie(part));
+    let child = node;
+    for (let at = this.#above(child); at && !isFunction(at); at = this.#above(child)) {
+      if (at.type === "IfStatement" || at.type === "ConditionalExpression") {
+        if (child !== at.test && readsCookie(at.test)) return true;
+      } else if (at.type === "LogicalExpression") {
+        if (child === at.right && readsCookie(at.left)) return true;
+      } else if (at.type === "BlockStatement" || at.type === "Program") {
+        const before = (at.body as AnyNode[]).filter((statement) => statement.start < child.start);
+        if (before.some((s) => s.type === "IfStatement" && readsCookie(s.test))) return true;
+      }
+      child = at;
+    }
+    return false;
+  }
+
+  /**
+   * The code at `node` sits behind a test that can be worked out for this page, and the test
+   * says it does not run: `if (location.href.includes("/old/")) location.reload();`.
+   */
+  ruledOut(node: AnyNode): boolean {
+    let child = node;
+    for (let at = this.#above(child); at && !isFunction(at); at = this.#above(child)) {
+      if ((at.type === "IfStatement" || at.type === "ConditionalExpression") && child !== at.test) {
+        const test = this.evaluate(at.test);
+        if (test !== UNKNOWN && Boolean(test) !== (child === at.consequent)) return true;
+      }
+      if (at.type === "LogicalExpression" && child === at.right) {
+        const left = this.evaluate(at.left);
+        // a && b runs b when a is true, a || b when it is false, a ?? b when it is null.
+        const runs =
+          at.operator === "&&" ? Boolean(left) : at.operator === "||" ? !left : left === null;
+        if (left !== UNKNOWN && !runs) return true;
+      }
+      child = at;
+    }
+    return false;
+  }
+
+  /** #flow, worked out the first time it is needed. */
+  #knownFlow(): { running: Set<AnyNode>; maybe: Set<AnyNode> } {
+    this.#flow ??= this.#findFlow();
+    return this.#flow;
   }
 
   /**
@@ -349,20 +567,29 @@ class PageScripts {
    */
   #runs(node: AnyNode, redirect = false): boolean {
     const owner = this.#owner(node, redirect);
-    return owner === null || (owner !== SOMETIMES && this.#running?.has(owner) === true);
+    return owner === null || (owner !== SOMETIMES && this.#flow?.running.has(owner) === true);
   }
 
   /** The function the code at `node` is part of (see Owner). */
   #owner(node: AnyNode, redirect = false): Owner {
-    // Code given to a timer as a string counts as sitting inside the call that starts the timer.
-    const above = (child: AnyNode) => this.#parents.get(child) ?? this.#triggers.get(child);
     let child = node;
-    for (let parent = above(child); parent; parent = above(child)) {
+    for (let parent = this.#above(child); parent; parent = this.#above(child)) {
       if (isFunction(parent)) return parent;
       if (!this.#reaches(parent, child, redirect)) return SOMETIMES;
       child = parent;
     }
     return null;
+  }
+
+  /** The function around `node`, whatever the tests in between; null for the top of a script. */
+  #enclosing(node: AnyNode): AnyNode | null {
+    for (let at = this.#above(node); at; at = this.#above(at)) if (isFunction(at)) return at;
+    return null;
+  }
+
+  /** The node around `node`. Code given to a timer as a string sits in the call that starts it. */
+  #above(node: AnyNode): AnyNode | undefined {
+    return this.#parents.get(node) ?? this.#triggers.get(node);
   }
 
   /** Whether everyone who runs `parent` also runs `child`, or has been sent elsewhere before. */
@@ -528,29 +755,84 @@ class PageScripts {
   }
 
   /**
-   * The functions the page runs by itself. Starting from the top of the scripts, a function runs
-   * when code that runs calls it, starts it as a timer or a load handler, or calls it right away.
+   * Which functions run. Starting from the top of the scripts, a function runs when code that
+   * runs calls it, starts it as a timer or a load handler, or calls it right away. It may run when
+   * such code gives it to code the analysis does not know (see #handedTo), and so on from there.
    * Worked out in one pass, so a function that only calls itself never counts.
    */
-  #findRunning(): Set<AnyNode> {
+  #findFlow(): { running: Set<AnyNode>; maybe: Set<AnyNode> } {
     // For the code of each function (null: the top of the scripts), the functions it runs.
     const runs = new Map<AnyNode | null, AnyNode[]>();
+    const mayRun = new Map<AnyNode | null, AnyNode[]>();
     for (const fn of this.#allFunctions) {
       for (const runner of this.#runners(fn)) {
         const owner = this.#owner(runner);
         if (owner !== SOMETIMES) this.#add(runs, owner, fn);
       }
-    }
-    const running = new Set<AnyNode>();
-    const queue: (AnyNode | null)[] = [null];
-    for (const owner of queue) {
-      for (const fn of this.#list(runs, owner)) {
-        if (running.has(fn)) continue;
-        running.add(fn);
-        queue.push(fn);
+      for (const handover of this.#handovers(fn)) {
+        const owner = this.#owner(handover);
+        if (owner !== SOMETIMES) this.#add(mayRun, owner, fn);
       }
     }
-    return running;
+    const running = reach([runs]);
+    const maybe = reach([runs, mayRun]);
+    for (const fn of running) maybe.delete(fn);
+    return { running, maybe };
+  }
+
+  /** Where `fn` is given, by itself or by its name, to code the analysis does not know. */
+  *#handovers(fn: AnyNode): Generator<AnyNode> {
+    const handover = this.#handedTo(fn);
+    if (handover) yield handover;
+    const name = functionName(fn, this.#parent(fn));
+    if (name === undefined || !this.#isOnlyFunction(name)) return;
+    for (const reference of this.#list(this.#references, name)) {
+      const byName = this.#handedTo(reference);
+      if (byName) yield byName;
+    }
+  }
+
+  /**
+   * The call or assignment that gives `node` to code the analysis does not know, which may run
+   * it: fetch(url).then(fn), $.ajax({ success: fn }), xhr.onreadystatechange = fn. Not one that
+   * runs it for sure (see #handlerOf) or only after a person does something ($("#b").click(fn)).
+   */
+  #handedTo(node: AnyNode): AnyNode | undefined {
+    const parent = this.#parent(node);
+    if (parent.type === "AssignmentExpression") {
+      const event = handlerEvent(parent.left);
+      const other = event !== undefined && !LOAD_EVENTS.has(event) && !USER_EVENTS.has(event);
+      return parent.right === node && other ? parent : undefined;
+    }
+    // { success: fn } among the arguments
+    const argument =
+      parent.type === "Property" && parent.value === node ? this.#parent(parent) : node;
+    const call = argument === node ? parent : this.#parent(argument);
+    const given = call.type === "CallExpression" || call.type === "NewExpression";
+    return given && call.callee !== argument && this.#mayCallIt(call, argument) ? call : undefined;
+  }
+
+  /**
+   * Whether `call` may run `argument`: a call the analysis does not know, or one for an event that
+   * neither a person nor the page load causes.
+   */
+  #mayCallIt(call: CallExpression | NewExpression, argument: AnyNode): boolean {
+    const name = calleeName(call);
+    if (name === undefined) return true;
+    // Calls it knows: they run the function on load, after a delay, or after a person acts.
+    if (TIMERS.has(name) || USER_EVENTS.has(name)) return false;
+    if (["$", "jQuery", "ready", "load"].includes(name)) return false;
+    if (!EVENT_METHODS.has(name)) return true;
+    // addEventListener(fn) names no event at all, so fn never runs.
+    if (call.arguments[0] === argument) return false;
+    // addEventListener("message", fn), xhr.on("readystatechange", fn)
+    for (const each of call.arguments) {
+      const value = this.evaluate(each);
+      if (typeof value !== "string") continue;
+      const event = value.replace(/^on/i, "");
+      if (LOAD_EVENTS.has(event) || USER_EVENTS.has(event)) return false;
+    }
+    return true;
   }
 
   /** The calls and assignments that run `fn` if they run themselves. */
@@ -596,11 +878,12 @@ class PageScripts {
     const [first, second] = call.arguments;
     const name = calleeName(call);
     if (name !== undefined && TIMERS.has(name)) return node === first && !this.#waitsLong(call);
-    if (name === "addEventListener" || name === "on") {
+    // addEventListener("load", fn), $(window).on/one/bind("load", fn), attachEvent("onload", fn)
+    if (["addEventListener", "attachEvent", "on", "one", "bind"].includes(name as string)) {
       if (node !== second) return false;
       // There is an argument 1, so there is an argument 0: the name of the event.
       const event = this.evaluate(first as AnyNode);
-      return typeof event === "string" && LOAD_EVENTS.has(event);
+      return typeof event === "string" && LOAD_EVENTS.has(event.replace(/^on/, ""));
     }
     if (node !== first) return false;
     // jQuery: $(fn), jQuery(fn), $(document).ready(fn), $(window).load(fn)
@@ -651,16 +934,25 @@ class PageScripts {
         return text;
       }
       case "BinaryExpression": {
-        if (node.operator !== "+" && node.operator !== "*") return UNKNOWN;
+        const { operator } = node;
+        if (operator !== "+" && operator !== "*" && !COMPARISONS.has(operator)) return UNKNOWN;
         const left = this.evaluate(node.left, depth);
         const right = this.evaluate(node.right, depth);
+        if (COMPARISONS.has(operator)) return compare(operator, left, right);
         if (typeof left === "number" && typeof right === "number") {
-          return node.operator === "+" ? left + right : left * right;
+          return operator === "+" ? left + right : left * right;
         }
-        if (node.operator === "*") return UNKNOWN; // only numbers are multiplied here
+        if (operator === "*") return UNKNOWN; // only numbers are multiplied here
         const a = this.asText(left);
         const b = this.asText(right);
         return a === null || b === null ? UNKNOWN : a + b;
+      }
+      case "UnaryExpression": {
+        const value = this.evaluate(node.argument, depth);
+        if (node.operator === "!") return value === UNKNOWN ? UNKNOWN : !value;
+        // -1, as in indexOf(x) !== -1
+        if (node.operator === "-" && typeof value === "number") return -value;
+        return UNKNOWN;
       }
       case "ThisExpression":
         return WINDOW;
@@ -886,6 +1178,7 @@ function callMethod(
     // in the replacement copies text ("$&" is the match), so the result could be any length.
     const pair = typeof a === "string" && typeof b === "string" && !b.includes("$");
     const range = typeof a === "number" && (b === undefined || typeof b === "number");
+    const find = typeof a === "string" && (b === undefined || typeof b === "number");
     switch (name) {
       case "replace":
         return pair ? text.replace(a, b) : UNKNOWN;
@@ -911,6 +1204,15 @@ function callMethod(
         return text.toLowerCase();
       case "toString":
         return text;
+      // For tests such as location.href.includes("/old/"), with or without a position.
+      case "includes":
+        return find ? text.includes(a, b) : UNKNOWN;
+      case "startsWith":
+        return find ? text.startsWith(a, b) : UNKNOWN;
+      case "endsWith":
+        return find ? text.endsWith(a, b) : UNKNOWN;
+      case "indexOf":
+        return find ? text.indexOf(a, b) : UNKNOWN;
       default:
         return UNKNOWN;
     }
@@ -1014,7 +1316,7 @@ function propertyName(node: AnyNode): string | undefined {
     : undefined;
 }
 
-function calleeName(call: CallExpression): string | undefined {
+function calleeName(call: CallExpression | NewExpression): string | undefined {
   return call.callee.type === "Identifier" ? call.callee.name : propertyName(call.callee);
 }
 
@@ -1082,6 +1384,94 @@ function isOnloadProperty(node: AnyNode): boolean {
   if (node.type === "Identifier") return node.name === "onload";
   const name = propertyName(node);
   return name === "onload" || name === "onpageshow";
+}
+
+/** "readystatechange" for xhr.onreadystatechange (or a bare onreadystatechange), else undefined. */
+function handlerEvent(node: AnyNode): string | undefined {
+  const name = node.type === "Identifier" ? node.name : propertyName(node);
+  return name?.startsWith("on") && name.length > 2 ? name.slice(2).toLowerCase() : undefined;
+}
+
+/** eval(code), also as window.eval(code). */
+function isEval(call: CallExpression): boolean {
+  const callee = call.callee;
+  if (callee.type === "Identifier") return callee.name === "eval";
+  return (
+    propertyName(callee) === "eval" &&
+    callee.type === "MemberExpression" &&
+    isWindowLike(callee.object)
+  );
+}
+
+/** form.submit() and link.click(): where they lead, only running the page shows. */
+function isOpaqueCall(call: CallExpression): boolean {
+  const callee = call.callee;
+  const name = propertyName(callee);
+  // Given a function, jQuery's submit() and click() only add a handler.
+  const action = name === "submit" || name === "requestSubmit" || name === "click";
+  return action && !call.arguments.some(isFunction);
+}
+
+/** location.reload(), window.location.reload(true)... */
+function isReload(call: CallExpression): boolean {
+  const callee = call.callee;
+  return (
+    propertyName(callee) === "reload" &&
+    callee.type === "MemberExpression" &&
+    isLocation(callee.object)
+  );
+}
+
+/** document.cookie = ..., also as window.document.cookie. */
+function isCookie(node: AnyNode): boolean {
+  if (node.type !== "MemberExpression" || propertyName(node) !== "cookie") return false;
+  const owner = node.object;
+  return (
+    (owner.type === "Identifier" && owner.name === "document") ||
+    (owner.type === "MemberExpression" &&
+      propertyName(owner) === "document" &&
+      isWindowLike(owner.object))
+  );
+}
+
+/**
+ * `left operator right` for two known strings, numbers, booleans or nulls, the way JavaScript
+ * works it out; UNKNOWN otherwise. == and != are worked out only between two values of the same
+ * type, where they mean what === and !== mean.
+ */
+function compare(operator: string, left: Value, right: Value): Value {
+  const simple = (value: Value) =>
+    value === null || ["string", "number", "boolean"].includes(typeof value);
+  if (!simple(left) || !simple(right)) return UNKNOWN;
+  const same = typeof left === typeof right;
+  if (operator === "===") return left === right;
+  if (operator === "!==") return left !== right;
+  if (!same) return UNKNOWN;
+  if (operator === "==") return left === right;
+  if (operator === "!=") return left !== right;
+  // Two numbers, or two strings (compared the same way); null and booleans are not ordered here.
+  if (typeof left !== "number" && typeof left !== "string") return UNKNOWN;
+  const [a, b] = [left as number, right as number];
+  if (operator === "<") return a < b;
+  if (operator === ">") return a > b;
+  if (operator === "<=") return a <= b;
+  return a >= b;
+}
+
+/** Every function reached from the top of the scripts (null) through the given maps. */
+function reach(maps: Map<AnyNode | null, AnyNode[]>[]): Set<AnyNode> {
+  const found = new Set<AnyNode>();
+  const queue: (AnyNode | null)[] = [null];
+  for (const from of queue) {
+    for (const map of maps) {
+      for (const fn of map.get(from) ?? []) {
+        if (found.has(fn)) continue;
+        found.add(fn);
+        queue.push(fn);
+      }
+    }
+  }
+  return found;
 }
 
 /** The name a function is known by: `function go()`, `var go = function`, `go = () => ...`. */

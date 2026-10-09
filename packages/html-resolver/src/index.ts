@@ -53,10 +53,16 @@ export type HtmlFinding =
   | { kind: "human-check" }
   /** A script leaves the page by itself, but where to could not be worked out without running it. */
   | { kind: "unknown-script" }
-  /** A "you are leaving" page that shows where it leads but has no link there: it waits for a click. */
-  | { kind: "needs-click" }
-  /** Nothing found: as far as the page shows, it is the destination. */
-  | { kind: "none" };
+  /**
+   * A "you are leaving" page that shows where it leads but has no link there: it waits for a click.
+   * With scriptsMayLeave (as for "none"), its scripts may still move on by themselves.
+   */
+  | { kind: "needs-click"; scriptsMayLeave?: true }
+  /**
+   * Nothing found: as far as the page shows, it is the destination. scriptsMayLeave: its scripts
+   * may still move on, in a way only running them shows (JsFinding "maybe" in js-resolver).
+   */
+  | { kind: "none"; scriptsMayLeave?: true };
 
 /**
  * Where a Refresh header or a <meta http-equiv="refresh"> sends the browser, as an absolute URL.
@@ -207,10 +213,11 @@ export function findHtmlTarget(
     return { kind: "redirect", url: scripted.url, method: "javascript" };
   }
   if (scripted.kind === "unknown") return { kind: "unknown-script" };
+  const maybe = scripted.kind === "maybe" ? ({ scriptsMayLeave: true } as const) : {};
   // Shown as the address wrote it, as the URL parser rewrites it, or without the trailing slash.
   const shown = named.flatMap((url) => [url.written, url.href, url.href.replace(/\/$/, "")]);
-  if (shown.some((form) => text.includes(form))) return { kind: "needs-click" };
-  return { kind: "none" };
+  if (shown.some((form) => text.includes(form))) return { kind: "needs-click", ...maybe };
+  return { kind: "none", ...maybe };
 }
 
 /**

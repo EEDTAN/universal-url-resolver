@@ -4,10 +4,10 @@ import { isIP, type LookupFunction, type Socket } from "node:net";
 import { isHttpUrl } from "@urlresolve/url-parser";
 
 /** Statuses a browser follows by itself (Fetch standard). 201, 300, 304 and 305 are not followed. */
-const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+export const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 
 /** Ports browsers refuse to connect to (mail, FTP, SSH, IRC, SIP...): fetch.spec.whatwg.org/#port-blocking */
-const BAD_PORTS = new Set([
+export const BAD_PORTS: ReadonlySet<number> = new Set([
   0, 1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95, 101, 102,
   103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
   512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993,

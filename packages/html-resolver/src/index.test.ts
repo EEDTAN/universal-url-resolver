@@ -435,6 +435,18 @@ describe("findHtmlTarget: scripts", () => {
     expect(findHtmlTarget(js(toDest), page, { onlyHumanCheck: true })).toEqual({ kind: "none" });
   });
 
+  it("says when the scripts may still move on, for a browser to find out", () => {
+    const fetched = js(
+      "fetch('/api').then((r) => r.json()).then((d) => { location.href = d.url; })",
+    );
+    expect(findHtmlTarget(fetched, page)).toEqual({ kind: "none", scriptsMayLeave: true });
+    const leaving = new URL("https://l.example/?u=https://dest.example/");
+    expect(findHtmlTarget(`<p>https://dest.example/</p>${fetched}`, leaving)).toEqual({
+      kind: "needs-click",
+      scriptsMayLeave: true,
+    });
+  });
+
   describe("in order", () => {
     const leaving = new URL("https://l.example/l.php?u=https%3A%2F%2Fdest.example%2F");
 

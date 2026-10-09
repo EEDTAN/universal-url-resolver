@@ -1,7 +1,12 @@
 import { findHtmlTarget, refreshTarget } from "@urlresolve/html-resolver";
 import { type HopOptions, type HopResult, requestHop } from "@urlresolve/http-resolver";
 import { safeLookup } from "@urlresolve/security";
-import type { ResolveMethod, ResolveResult, ResolveStatus } from "@urlresolve/types";
+import type {
+  BrowserResolver,
+  ResolveMethod,
+  ResolveResult,
+  ResolveStatus,
+} from "@urlresolve/types";
 import { parseInputUrl, resolveLocation } from "@urlresolve/url-parser";
 import { CookieJar } from "./cookie-jar.ts";
 
@@ -32,6 +37,14 @@ export interface ResolveOptions {
    * which only allows public addresses. Tests pass their own to reach a local mock server.
    */
   lookup?: HopOptions["lookup"];
+  /**
+   * A real browser for the pages the readers above cannot settle: a script that certainly leaves
+   * for a place that cannot be worked out, or one that may move on in a way only running it
+   * shows. Default: none. Then the first kind ends UNRESOLVED and the second counts as the
+   * destination. createBrowserResolver from @urlresolve/browser-resolver makes one; it checks
+   * every connection with its own lookup.
+   */
+  browser?: BrowserResolver;
 }
 
 /**
@@ -46,6 +59,7 @@ export async function resolveUrl(
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxRedirects = DEFAULT_MAX_REDIRECTS,
     lookup = safeLookup,
+    browser,
   } = options;
   // Node turns a longer timer (about 24.8 days) into 1 ms, which would be a false TIMEOUT.
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
@@ -106,9 +120,7 @@ export async function resolveUrl(
     // The same URL with the same cookies is the same request, so its answer would repeat too.
     // The #fragment is never sent, so it does not count.
     const request = `${url.href.split("#")[0]} ${cookie ?? ""}`;
-    if (requestsSent.has(request)) {
-      return finish("REDIRECT_LOOP", "The redirects lead back to a URL that was already visited");
-    }
+    if (requestsSent.has(request)) return finish("REDIRECT_LOOP", LOOP_ERROR);
     requestsSent.add(request);
     if (chain.length - 1 > maxRedirects) {
       return finish("UNRESOLVED", `More than ${maxRedirects} redirects`);
@@ -120,7 +132,45 @@ export async function resolveUrl(
     method ??= "http";
     cookies.store(url, hop.setCookies);
 
-    const step = nextStep(hop, url);
+    let step = nextStep(hop, url);
+    if (step.kind !== "follow" && step.tryBrowser && browser) {
+      // The browser opens this page again, with the cookies this resolution has for it, and
+      // follows it to wherever it stays.
+      const remaining = maxRedirects - (chain.length - 1);
+      const visit = await browser.visit(url, {
+        signal,
+        maxNavigations: remaining,
+        cookie: cookies.header(url),
+      });
+      method = "browser";
+      for (const href of visit.chain.slice(1)) {
+        // Every page the browser went to: only http(s), and never a password.
+        const next = resolveLocation(href, url, { inheritFragment: false });
+        credentialsRemoved ||= next.credentialsRemoved;
+        if (!next.ok) return finish(next.status, next.error);
+        url = next.url;
+        chain.push(url.href);
+      }
+      if (chain.length - 1 > maxRedirects) {
+        return revisits(visit.chain)
+          ? finish("REDIRECT_LOOP", LOOP_ERROR)
+          : finish("UNRESOLVED", `More than ${maxRedirects} redirects`);
+      }
+      if (!visit.ok) {
+        const timedOut = visit.status === "TIMEOUT";
+        return finish(
+          visit.status,
+          timedOut ? `Browser navigation exceeded ${timeoutMs / 1000} seconds` : visit.error,
+        );
+      }
+      const { statusCode, challenge, refresh, html } = visit;
+      httpStatus = statusCode;
+      // The page the browser stayed on, read like any other: a slow countdown or refresh is
+      // followed from here, and a script that certainly leaves for a place unknown still ends
+      // UNRESOLVED. A page that only may move on counts as arrived: the browser saw it stay.
+      const page = { statusCode, location: null, setCookies: [], challenge, refresh, html };
+      step = nextStep({ ok: true, ...page }, url);
+    }
     if (step.kind === "arrived") return finish("RESOLVED");
     if (step.kind === "stop") return finish(step.status, step.error);
     method = heavier(method, step.method);
@@ -133,16 +183,19 @@ export async function resolveUrl(
   }
 }
 
+/** tryBrowser: a browser may find out where this page goes, which the readers here could not. */
 type Step =
   | { kind: "follow"; target: string; method: ResolveMethod }
-  | { kind: "stop"; status: Exclude<ResolveStatus, "RESOLVED">; error: string }
-  | { kind: "arrived" };
+  | { kind: "stop"; status: Exclude<ResolveStatus, "RESOLVED">; error: string; tryBrowser?: true }
+  | { kind: "arrived"; tryBrowser?: true };
 
 const HUMAN_CHECK: Step = {
   kind: "stop",
   status: "UNRESOLVED",
   error: "Human verification required",
 };
+
+const LOOP_ERROR = "The redirects lead back to a URL that was already visited";
 
 /** What one answer means: go on to another URL, stop, or this page is the destination. */
 function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
@@ -168,16 +221,31 @@ function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
   if (page?.kind === "unknown-script") {
     // The page leaves by itself, so it is not the destination, but where it goes is unknown.
     const error = "JavaScript destination could not be determined";
-    return { kind: "stop", status: "UNRESOLVED", error };
+    return { kind: "stop", status: "UNRESOLVED", error, tryBrowser: true };
   }
+  // Scripts that may still move on in a way only running them shows.
+  const tryBrowser = page?.scriptsMayLeave;
   if (page?.kind === "needs-click") {
     // Not the destination, but it only goes on when a person clicks (with JavaScript).
     const error = "The page asks for a click to continue to another site";
-    return { kind: "stop", status: "UNRESOLVED", error };
+    return { kind: "stop", status: "UNRESOLVED", error, tryBrowser };
   }
-  return { kind: "arrived" };
+  return { kind: "arrived", tryBrowser };
 }
 
 function heavier(a: ResolveMethod, b: ResolveMethod): ResolveMethod {
   return METHOD_ORDER.indexOf(a) > METHOD_ORDER.indexOf(b) ? a : b;
+}
+
+/**
+ * The browser kept going round: a page came up three times (A, B, A, B, A). Twice is not enough,
+ * because a page that sets a cookie and reloads itself comes up twice on its way somewhere.
+ */
+function revisits(chain: string[]): boolean {
+  const seen = new Map<string, number>();
+  for (const href of chain) {
+    const page = href.replace(/#.*/s, "");
+    seen.set(page, (seen.get(page) ?? 0) + 1);
+  }
+  return [...seen.values()].some((times) => times >= 3);
 }

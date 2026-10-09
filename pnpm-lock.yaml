@@ -172,6 +172,9 @@ importers:
       '@types/node':
         specifier: 24.19.1
         version: 24.19.1
+      '@urlresolve/browser-resolver':
+        specifier: workspace:*
+        version: link:packages/browser-resolver
       '@urlresolve/core':
         specifier: workspace:*
         version: link:packages/core
@@ -187,6 +190,21 @@ importers:
       vitest:
         specifier: 5.0.3
         version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
+
+  packages/browser-resolver:
+    dependencies:
+      '@urlresolve/http-resolver':
+        specifier: workspace:*
+        version: link:../http-resolver
+      '@urlresolve/security':
+        specifier: workspace:*
+        version: link:../security
+      '@urlresolve/types':
+        specifier: workspace:*
+        version: link:../types
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
 
   packages/core:
     dependencies:
@@ -758,6 +776,11 @@ packages:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
 
+  playwright-core@1.64.0:
+    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   postcss@8.5.29:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
     engines: {node: ^10 || ^12 || >=14}
@@ -1223,6 +1246,8 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playwright-core@1.64.0: {}
 
   postcss@8.5.29:
     dependencies:

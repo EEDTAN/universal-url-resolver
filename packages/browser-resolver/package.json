@@ -1,0 +1,13 @@
+{
+  "name": "@urlresolve/browser-resolver",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@urlresolve/http-resolver": "workspace:*",
+    "@urlresolve/security": "workspace:*",
+    "@urlresolve/types": "workspace:*",
+    "playwright-core": "1.64.0"
+  }
+}

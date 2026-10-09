@@ -28,7 +28,8 @@
               "node:dns/promises": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
               "node:dgram": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
               "node:child_process": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
-              "undici": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json."
+              "undici": "Network access goes through @urlresolve/http-resolver so every connection passes the security lookup. A package that truly needs this module gets a deliberate override in biome.json.",
+              "playwright-core": "The browser goes through @urlresolve/browser-resolver, whose proxy checks every connection. Use createBrowserResolver from there."
             }
           }
         }
@@ -40,6 +41,8 @@
       "includes": [
         "packages/http-resolver/src/index.ts",
         "packages/security/src/index.ts",
+        "packages/browser-resolver/src/proxy.ts",
+        "packages/browser-resolver/src/index.ts",
         "tests/**",
         "**/*.test.ts"
       ],

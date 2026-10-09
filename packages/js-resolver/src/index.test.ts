@@ -10,6 +10,7 @@ function find(scripts: string | string[], at = page) {
 const redirect = (url: string) => ({ kind: "redirect", url });
 const NONE = { kind: "none" };
 const UNKNOWN = { kind: "unknown" };
+const MAYBE = { kind: "maybe" };
 
 describe("findJsTarget: what counts as leaving the page", () => {
   it.each([
@@ -39,7 +40,6 @@ describe("findJsTarget: what counts as leaving the page", () => {
     ['document.open("https://dest.test/", "_self")', "document.open, which is no navigation"],
     ['location.hash = "#top"', "a jump inside the page"],
     ['history.pushState({}, "", "/other")', "a change of address without loading"],
-    ["location.reload()", "a reload"],
     ['element.location = "https://dest.test/"', "the location of something else"],
     ['frame.contentWindow.location = "https://dest.test/"', "the location of another window"],
     ['window.opener.location = "https://dest.test/"', "the window that opened this one"],
@@ -142,6 +142,31 @@ describe("findJsTarget: working out the URL", () => {
     ['location.href = "https://dest.test/" + true + null', "https://dest.test/truenull"],
     ['location.href = "https://dest.test/" + 6 * 7', "https://dest.test/42"],
     [
+      'location.href = "https://dest.test/" + (1 < 2) + (2 <= 1) + ("b" > "a") + (2 >= 2)',
+      "https://dest.test/truefalsetruetrue",
+    ],
+    [
+      'location.href = "https://dest.test/" + (null === null) + (1 != 2) + ("x" == "x") + (1 !== 1)',
+      "https://dest.test/truetruetruefalse",
+    ],
+    ['location.href = "https://dest.test/" + !"" + !location', "https://dest.test/truefalse"],
+    [
+      'location.href = "https://dest.test/" + -1 + (2 < 2) + (2 <= 2) + (2 > 2)',
+      "https://dest.test/-1falsetruefalse",
+    ],
+    [
+      'location.href = "https://dest.test/" + ("1" === 1) + "abcabc".indexOf("b", 2)',
+      "https://dest.test/false4",
+    ],
+    [
+      'var s = "?x=1&to=https://dest.test/p"; location.href = s.slice(s.indexOf("=", 3) + 1);',
+      "https://dest.test/p",
+    ],
+    [
+      'location.href = "https://dest.test/" + "abc".indexOf("c") + "abc".startsWith("a") + "abc".endsWith("x") + "abc".includes("b")',
+      "https://dest.test/2truefalsetrue",
+    ],
+    [
       'location.href = "https://dest.test/" + location.host + location.port + location.hash',
       "https://dest.test/short.test",
     ],
@@ -186,6 +211,16 @@ describe("findJsTarget: working out the URL", () => {
     ['location.href = "ab".split(/b/)[0]', "a split on a regular expression"],
     ['location.href = "x".repeat(3)', "a string method this tool does not run"],
     ['location.href = "x" * 2', "multiplying text"],
+    ['location.href = "/" + ("1" == 1)', "== between a string and a number"],
+    ['location.href = "/" + (true < false)', "< between booleans"],
+    ['location.href = "/" + ({} === {})', "=== between objects"],
+    ['location.href = "/" + !x', "! of an unknown value"],
+    ['location.href = "/" + -x', "a minus sign before an unknown value"],
+    ['location.href = "/" + ~1', "an operator other than ! and -"],
+    [
+      'location.href = "/" + "abc".includes(1) + "abc".startsWith(1) + "abc".endsWith(1) + "abc".indexOf(1)',
+      "includes, startsWith, endsWith and indexOf with a number",
+    ],
     ['location.href = "/" + (2 - 1)', "arithmetic other than + and *"],
     ['location.href = "https://dest.test/a".replace("a", "$&$&")', "a replacement with $"],
     // biome-ignore lint/suspicious/noTemplateCurlyInString: JavaScript source for the analyzer
@@ -263,6 +298,7 @@ describe("findJsTarget: working out the URL", () => {
     ["function f({u}, [v], ...w) {} location.href = u", "a function parameter in a pattern"],
     ['u++; location.href = "https://dest.test/" + u', "a name counted with ++"],
     ['u += "x"; location.href = u', "a name changed by +="],
+    ['window.u = "https://other.test/"; location.href = u', "a global changed through window"],
   ])("does not trust a name that also gets another value: %s (%s)", (script) => {
     expect(find(['var u = "https://dest.test/";', script])).toEqual(UNKNOWN);
   });
@@ -290,6 +326,18 @@ describe("findJsTarget: code the page runs by itself", () => {
     [
       'document.addEventListener("DOMContentLoaded", () => location.replace("https://dest.test/"))',
       "a DOMContentLoaded listener",
+    ],
+    [
+      '$(window).bind("load", function () { location.href = "https://dest.test/"; })',
+      "jQuery's bind('load')",
+    ],
+    [
+      '$(window).one("load", function () { location.href = "https://dest.test/"; })',
+      "jQuery's one('load')",
+    ],
+    [
+      'window.attachEvent("onload", function () { location.href = "https://dest.test/"; })',
+      "an old attachEvent('onload')",
     ],
     ['$(function () { location.href = "https://dest.test/"; })', "jQuery's $(fn)"],
     ['jQuery(() => { location.href = "https://dest.test/"; })', "jQuery(fn)"],
@@ -580,10 +628,7 @@ describe("findJsTarget: code the page runs by itself", () => {
 
   it.each([
     ["if (top != self) top.location = self.location;", "a frame breaking out"],
-    ["top.location = self.location;", "the same, without a test"],
-    ["location.href = location.href;", "a reload"],
     ['location.href = "#section";', "a jump inside the page"],
-    ["location.replace(location.pathname + location.search);", "the same address rebuilt"],
   ])("treats %s as staying on the page (%s)", (script) => {
     expect(find(script)).toEqual(NONE);
   });
@@ -877,10 +922,6 @@ describe("findJsTarget: the less common shapes", () => {
       "a .call handed to something else",
     ],
     [
-      'var n = 5; timers[0](function () { if (--n <= 0) location.href = "https://dest.test/"; }, 1000)',
-      "a countdown in a call whose name is unknown",
-    ],
-    [
       'class A { #location; m() { this.#location = "https://dest.test/"; } }',
       "a private field named location",
     ],
@@ -892,5 +933,220 @@ describe("findJsTarget: the less common shapes", () => {
     ['try { x(); } catch { location.href = "https://dest.test/"; }', "a catch without a variable"],
   ])("ignores %s (%s)", (script) => {
     expect(find(script)).toEqual(NONE);
+  });
+});
+
+describe("findJsTarget: what only running the page shows", () => {
+  it.each([
+    [
+      'fetch("/api").then((r) => r.json()).then((d) => { location.href = d.url; })',
+      "a destination fetched first",
+    ],
+    [
+      'fetch("/api").then((r) => r.json()).then((d) => { if (d.url) location.href = d.url; })',
+      "the same, with a test inside the callback",
+    ],
+    [
+      '$.ajax({ url: "/api", success: function (d) { location.href = d.url; } })',
+      "a jQuery ajax callback",
+    ],
+    ['$.get("/api", function (d) { location.replace(d.url); })', "a jQuery get callback"],
+    [
+      'function go(d) { location.href = d.url; } fetch("/api").then(go)',
+      "a named function given to then()",
+    ],
+    [
+      "var xhr = new XMLHttpRequest(); xhr.onreadystatechange = function () { location.href = xhr.responseText; }; xhr.send();",
+      "an XMLHttpRequest handler",
+    ],
+    [
+      'addEventListener("message", function (e) { location.href = e.data; })',
+      "a message from another window",
+    ],
+    [
+      'addEventListener(name, function () { location.href = "https://dest.test/"; })',
+      "an event whose name is unknown",
+    ],
+    [
+      'new Promise(function () { location.href = "https://dest.test/"; })',
+      "a known URL in code given to a constructor",
+    ],
+    [
+      'fetch("/a").then(() => { setTimeout(() => { location.href = "https://dest.test/"; }, 100); })',
+      "a timer started by a callback",
+    ],
+    [
+      'var n = 5; timers[0](function () { if (--n <= 0) location.href = "https://dest.test/"; }, 1000)',
+      "a countdown in a call whose name is unknown",
+    ],
+    ['document.cookie = "seen=1"; location.reload();', "a reload after setting a cookie"],
+    [
+      'if (document.cookie.indexOf("seen") < 0) { document.cookie = "seen=1"; window.location.reload(); }',
+      "a reload only when the cookie is missing",
+    ],
+    ["location.href = location.href;", "the page sent to itself"],
+    ["top.location = self.location;", "the same, from the top window"],
+    ["location.replace(location.pathname + location.search);", "the same address rebuilt"],
+    ["document.forms[0].submit();", "a form submitted by the page"],
+    ['document.getElementById("f").requestSubmit();', "requestSubmit()"],
+    ['$("#f").submit();', "a jQuery submit without a handler"],
+    ['document.getElementById("go").click();', "a click made by the page"],
+    ["setTimeout(function () { document.forms[0].submit(); }, 100);", "a submit in a timer"],
+    [
+      'eval(function (p, a, c, k, e, d) { return p; }("location.href=1", 1, 1, [], 0, {}));',
+      "packed code",
+    ],
+    ["eval(code);", "eval of something unknown"],
+    ["window.eval(atob(x));", "window.eval of something unknown"],
+    ["new Function(text)();", "new Function made from unknown text"],
+    ['Function("return " + x)();', "Function made from unknown text"],
+  ])("may move on: %s (%s)", (script) => {
+    expect(find(script)).toEqual(MAYBE);
+  });
+
+  it.each([
+    ['Function("return this")();', "Function made from known text, a way to reach window"],
+    ['eval("var a = 1;");', "eval of known code that goes nowhere"],
+    ["b.onclick = function () { document.forms[0].submit(); };", "a submit after a click"],
+    [
+      'button.addEventListener("click", function () { location.reload(); });',
+      "a reload after a click",
+    ],
+    ['$("#f").submit(function () { location.href = "https://dest.test/"; });', "a submit handler"],
+    [
+      "setTimeout(function () { location.reload(); }, 15 * 60 * 1000);",
+      "a reload after 15 minutes",
+    ],
+    [
+      'function later() { fetch("/a").then((d) => { location.href = d.url; }); }',
+      "a callback in a function nobody calls",
+    ],
+    [
+      'if (ok) fetch("/a").then((d) => { location.href = d.url; });',
+      "a callback handed over behind a test",
+    ],
+    ['fetch("/a").then((d) => { location.href = "#done"; })', "a jump inside the page"],
+    ['fetch("/a").then(() => { window.open("https://dest.test/"); })', "a new window"],
+    [
+      'var config = { success: function () { location.href = "/x"; } };',
+      "an object no one is given",
+    ],
+    ["location.reload; form.submit", "methods that are named but not called"],
+  ])("does not expect a move from %s (%s)", (script) => {
+    expect(find(script)).toEqual(NONE);
+  });
+
+  it("reads eval of known code like any other script", () => {
+    expect(find("eval(\"location.href = 'https://dest.test/'\")")).toEqual(
+      redirect("https://dest.test/"),
+    );
+  });
+
+  it.each([
+    [
+      'if (location.hostname === "short.test") location.href = "https://a.test/"; else location.href = "https://b.test/";',
+      "https://a.test/",
+      "a choice by this page's own host",
+    ],
+    [
+      'if (location.protocol === "http:") location.href = "https://a.test/"; else location.href = "https://b.test/";',
+      "https://b.test/",
+      "a choice by this page's scheme",
+    ],
+    [
+      'location.hostname === "short.test" ? location.replace("https://a.test/") : location.replace("https://b.test/");',
+      "https://a.test/",
+      "the same with ?:",
+    ],
+  ])("follows the one way a test about this page allows: %s", (script, url) => {
+    expect(find(script)).toEqual(redirect(url));
+  });
+
+  it.each([
+    [
+      "var time = Date.now(); function refresh() { if (Date.now() - time >= 900000) location.reload(true); else setTimeout(refresh, 10000); } setTimeout(refresh, 10000);",
+      "a reload after a while of nothing happening",
+    ],
+    [
+      "window.onpageshow = function (e) { if (e.persisted) location.reload(); };",
+      "a reload when the page comes back from the history",
+    ],
+    [
+      'if (location.href.includes("/old-article/")) location.reload();',
+      "a reload for another page",
+    ],
+    ["ready || location.reload();", "a reload after || with a test of something else"],
+    ["true || document.forms[0].submit();", "a submit after || when the left side is true"],
+    ["0 ?? document.forms[0].submit();", "a submit after ?? when the left side is 0, not null"],
+    [
+      'function later() { if (!document.cookie.includes("ok")) location.reload(); }',
+      "a cookie check in a function nobody calls",
+    ],
+    [
+      'el.attachEvent("onclick", function () { document.forms[0].submit(); });',
+      "a submit after a click, through attachEvent",
+    ],
+    [
+      'removeEventListener("load", function () { location.href = "https://dest.test/"; });',
+      "a load handler that is taken away",
+    ],
+    ["var r = math.eval(expression);", "an eval method of something else"],
+    ['var u = location.href; $("#t").DataTable().ajax.reload();', "a reload of something else"],
+    [
+      'if (location.pathname.indexOf("/") < 0) document.forms[0].submit();',
+      "a test with < that is false for this page",
+    ],
+    [
+      "if (location.pathname.length > 4) document.forms[0].submit();",
+      "a test with > that is false for this page",
+    ],
+    ["if (location.port === 443) document.forms[0].submit();", "=== between text and a number"],
+    [
+      'if (location.href.indexOf("/old/") !== -1) document.forms[0].submit();',
+      "indexOf(...) !== -1, false for this page",
+    ],
+    ["false && document.forms[0].submit();", "a submit after && when the left side is false"],
+    ['"x" ?? document.forms[0].submit();', "a submit after ?? when the left side is set"],
+  ])("does not expect a move from %s (%s)", (script) => {
+    expect(find(script)).toEqual(NONE);
+  });
+
+  it.each([
+    [
+      '(function () { if (document.cookie.includes("ok=1")) return; document.cookie = "ok=1"; location.reload(); })();',
+      "a cookie check that returns early",
+    ],
+    ['document.cookie.includes("ok=1") || location.reload();', "a cookie check with ||"],
+    [
+      'if (window.document.cookie.indexOf("ok") < 0) { location.reload(); }',
+      "a cookie check through window.document",
+    ],
+    ["null ?? document.forms[0].submit();", "a submit after ?? when the left side is null"],
+    ['fetch("/api").then(() => { document.forms[0].submit(); });', "a submit in a callback"],
+    [
+      '$.get("/api", function () { document.getElementById("go").click(); });',
+      "a click in a callback",
+    ],
+    [
+      'Function(atob("bG9jYXRpb24uaHJlZiA9ICdodHRwczovL2Rlc3QuZXhhbXBsZS8nOw=="))();',
+      "Function made from known text that moves the page on",
+    ],
+    ["new Function(\"location.href = '/x'\")();", "new Function made from such text"],
+    [
+      'if (location.pathname.startsWith("out", 1)) document.forms[0].submit();',
+      "startsWith from a position, true for this page",
+    ],
+    [
+      "var go = false; window.go = true; if (go) document.forms[0].submit();",
+      "a global changed through window",
+    ],
+  ])("may move on: %s (%s)", (script) => {
+    expect(find(script)).toEqual(MAYBE);
+  });
+
+  it("prefers a certain redirect to a possible one", () => {
+    expect(find('location.reload(); location.href = "https://dest.test/";')).toEqual(
+      redirect("https://dest.test/"),
+    );
   });
 });
