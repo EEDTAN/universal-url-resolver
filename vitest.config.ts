@@ -24,6 +24,7 @@ export default defineConfig({
         "packages/tracking/src/**": { 100: true },
         "packages/adapters/src/**": { 100: true },
         "packages/browser-resolver/src/proxy.ts": { 100: true },
+        "apps/api/src/server.ts": { 100: true },
       },
     },
   },

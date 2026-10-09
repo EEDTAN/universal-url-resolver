@@ -1,0 +1,13 @@
+{
+  "name": "@urlresolve/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@fastify/rate-limit": "11.2.1",
+    "@urlresolve/browser-resolver": "workspace:*",
+    "@urlresolve/core": "workspace:*",
+    "@urlresolve/url-parser": "workspace:*",
+    "fastify": "5.12.5"
+  }
+}

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:compat": "node tests/compat/run.ts",
     "urlresolve": "node apps/cli/src/main.ts",
+    "api": "node --env-file-if-exists=.env apps/api/src/main.ts",
     "coverage": "vitest run --coverage",
     "build": "pnpm -r --if-present run build",
     "install-browser": "pnpm --filter @urlresolve/browser-resolver exec playwright-core install --only-shell chromium",
