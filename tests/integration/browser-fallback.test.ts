@@ -412,6 +412,7 @@ describe("when core asks the browser", () => {
     ["dest.test", "/", "a page without scripts"],
     ["app.test", "/gone", "an error page"],
     ["app.test", "/challenge", "a human check"],
+    ["app.test", "/leaving?u=https://dest.example/", "a page that waits for a click"],
   ])("leaves %s%s alone (%s)", async (host, path) => {
     const { stub, visits } = standIn();
     await resolveUrl(at(host, path), { lookup: policy, browser: stub });

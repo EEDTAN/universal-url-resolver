@@ -1,0 +1,44 @@
+[
+  {
+    "service": "Google redirect",
+    "url": "https://www.google.com/url?q=https://example.com/&sa=D",
+    "expected": "https://example.com/"
+  },
+  {
+    "service": "YouTube redirect",
+    "url": "https://www.youtube.com/redirect?q=https://example.com/",
+    "expected": "https://example.com/"
+  },
+  {
+    "service": "Facebook link shim",
+    "url": "https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2F",
+    "expected": "https://example.com/"
+  },
+  {
+    "service": "Steam link filter",
+    "url": "https://steamcommunity.com/linkfilter/?u=https://example.com/",
+    "expected": "https://example.com/"
+  },
+  {
+    "service": "LinkedIn link warning",
+    "url": "https://www.linkedin.com/safety/go?url=https%3A%2F%2Fexample.com%2F",
+    "expected": "https://example.com/"
+  },
+  {
+    "service": "LinkedIn redirect without urlhash",
+    "url": "https://www.linkedin.com/redir/redirect?url=https%3A%2F%2Fexample.com%2F",
+    "expected": "UNRESOLVED",
+    "note": "LinkedIn answers with a \"Link Error\" page that names the URL but does not go there."
+  },
+  {
+    "service": "Ouo",
+    "url": "https://ouo.io/NcVfJ9",
+    "expected": "UNRESOLVED",
+    "note": "Cloudflare answers with its challenge page (cf-mitigated: challenge), which only a person can pass."
+  },
+  {
+    "service": "ShrinkMe",
+    "url": "https://shrinkme.click/KNdMTC",
+    "note": "On 2026-10-09, from the network of the first run, the DNS answered with an address that never accepted a connection (an ISP block, it seems); public DNS answered with Cloudflare addresses."
+  }
+]
