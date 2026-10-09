@@ -4,7 +4,7 @@
 
 Designed to resolve a broad range of short-link and redirect mechanisms. You give it a short link (bit.ly, t.co, a self-hosted shortener, or one nobody has heard of yet) and it tries to find where the link really goes. It uses one generic pipeline instead of a list of known domains. When the destination can't be found safely, the result says so and explains why.
 
-**Status:** work in progress, phase 12 of 13. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
+**Status:** phase 13 of 13, the end of the planned build. The parts below all work; it is not yet released to npm. The engine follows HTTP redirects, redirects written into HTML pages and simple JavaScript redirects, and it can open the pages it cannot read in a real browser. For the link it ends at, it lists the tracking parameters and gives the same link without them. Knowledge about particular shortener services can be added as adapters. What happened with real links of real services is in [docs/compatibility.md](docs/compatibility.md). It runs from the command line (`urlresolve`), as an HTTP API and as a web page.
 
 ## Command line
 
@@ -93,6 +93,26 @@ Requires Node.js 24 or newer and pnpm 12.
 `pnpm test:compat` is the one check that does use the internet. It resolves the real links in `tests/compat/links.json`, without and with a browser, and writes the results with the date to [docs/compatibility.md](docs/compatibility.md). It is not part of `pnpm verify`, because a service can change its pages at any time.
 
 Every push and pull request runs `pnpm verify` and a dependency audit on GitHub Actions (`.github/workflows/ci.yml`), and CodeQL scans the code for security problems (`.github/workflows/codeql.yml`). Each action is pinned to a commit, and Dependabot proposes newer versions once they are a week old.
+
+## Limitations
+
+- It never defeats a CAPTCHA, a Cloudflare challenge or a login wall. A link behind one ends `UNRESOLVED` with "Human verification required". This is on purpose.
+- It reports only a destination it can prove. When a script hides where it goes in a way reading it cannot settle and no browser is given, the result says the destination could not be determined rather than guessing.
+- A self-hosted shortener on a private network is `BLOCKED` by design.
+- The browser fallback needs Chromium (`pnpm install-browser`), and it is slower than the static readers.
+- `docs/compatibility.md` reflects one run from one network on its date; a service can change, and a DNS block or firewall can change what one network sees.
+- It is not promised to handle every shortener; it is designed to resolve a broad range of short-link and redirect mechanisms.
+
+## Compatibility
+
+[docs/compatibility.md](docs/compatibility.md) lists real links that were actually tried and what happened to them, with the date of the run. It is written by `pnpm test:compat`; no status is shown there that was not measured.
+
+## Architecture, contributing and security
+
+- [docs/architecture.md](docs/architecture.md) — how the engine, the packages and the three apps fit together.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to add a resolver, an adapter, a fixture or a security rule.
+- [SECURITY.md](SECURITY.md) — what the project defends against, and how to report a vulnerability.
+- [CHANGELOG.md](CHANGELOG.md) — what has been built.
 
 ## License
 
