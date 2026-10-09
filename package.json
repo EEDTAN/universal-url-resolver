@@ -23,7 +23,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@types/node": "24.19.1",
+    "@types/node": "26.6.4",
     "@urlresolve/browser-resolver": "workspace:*",
     "@urlresolve/core": "workspace:*",
     "@urlresolve/security": "workspace:*",
