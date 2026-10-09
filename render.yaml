@@ -1,0 +1,19 @@
+# Deploy the resolver to Render (https://render.com) as one free web service that serves both the
+# web page and the API from the same address.
+#
+# On Render: New + -> Blueprint -> connect this repository -> Apply. Render reads this file,
+# builds the page and starts the server, and gives you a public URL to open.
+services:
+  - type: web
+    name: universal-url-resolver
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install -g pnpm@12.10.1 && pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm api
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # Listen on every interface so Render can reach it; Render sets PORT itself.
+      - key: HOST
+        value: 0.0.0.0
