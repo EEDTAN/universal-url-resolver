@@ -17,6 +17,12 @@ const BAD_PORTS = new Set([
 
 const USER_AGENT = "urlresolve (+https://github.com/EEDTAN/universal-url-resolver)";
 
+/**
+ * The most of an HTML page that is read (1 MiB); the rest is never downloaded. Redirect pages
+ * are small, so a page this big is a real page. Other kinds of response body are not read at all.
+ */
+export const MAX_HTML_SIZE = 1024 * 1024;
+
 export interface HopOptions {
   /**
    * DNS for this request, and the security hook: the request is never sent to an address this
@@ -41,15 +47,19 @@ export type HopResult =
       location: string | null;
       setCookies: string[];
       challenge: boolean;
+      refresh: string | null;
+      html: string | null;
     }
   | { ok: false; status: "BLOCKED" | "TIMEOUT" | "ERROR"; error: string };
 
 /**
- * One GET request. It never follows redirects and never reads the body.
+ * One GET request. It never follows redirects.
  * `location` is the raw Location header, set only for 301/302/303/307/308.
  * Turn it into a URL with resolveLocation() from @urlresolve/url-parser.
  * `setCookies` holds the raw Set-Cookie headers, for the caller's cookie jar.
  * `challenge` means the page wants a person to prove they are human (see below).
+ * `refresh` is the raw Refresh header. `html` is the page itself, at most MAX_HTML_SIZE bytes,
+ * read only when there is no Location to follow and the answer is uncompressed HTML.
  */
 export async function requestHop(
   url: URL,
@@ -98,8 +108,13 @@ export async function requestHop(
         agent: false,
         lookup: checkedLookup,
         signal,
-        // No accept-encoding: the body is never read.
-        headers: { "user-agent": USER_AGENT, accept: "*/*", ...(cookie ? { cookie } : {}) },
+        headers: {
+          "user-agent": USER_AGENT,
+          accept: "*/*",
+          // An HTML page is read (see MAX_HTML_SIZE), so it is asked for uncompressed.
+          "accept-encoding": "identity",
+          ...(cookie ? { cookie } : {}),
+        },
         // Set explicitly so that Node command-line flags and environment variables cannot loosen them.
         maxHeaderSize: 16 * 1024,
         insecureHTTPParser: false,
@@ -130,26 +145,35 @@ export async function requestHop(
       req.on("close", () => reject(withCode("Connection closed without a response", "ECONNRESET")));
       req.end();
     });
-    res.destroy(); // the status and headers are all that is needed
-
-    const statusCode = res.statusCode ?? 0;
-    const setCookies = res.headers["set-cookie"] ?? [];
-    // Cloudflare's documented marker for its "verify you are human" page. Only a person can pass
-    // it, and this project never tries to get around one.
-    const challenge = res.headers["cf-mitigated"] === "challenge";
-    if (!REDIRECT_STATUSES.has(statusCode)) {
-      return { ok: true, statusCode, location: null, setCookies, challenge };
+    try {
+      const statusCode = res.statusCode ?? 0;
+      const setCookies = res.headers["set-cookie"] ?? [];
+      // Cloudflare's documented marker for its "verify you are human" page. Only a person can
+      // pass it, and this project never tries to get around one.
+      const challenge = res.headers["cf-mitigated"] === "challenge";
+      const refresh = utf8(res.headersDistinct.refresh?.[0]);
+      let location: string | null = null;
+      if (REDIRECT_STATUSES.has(statusCode)) {
+        // res.headers keeps only the first Location; headersDistinct keeps every copy.
+        const locations = res.headersDistinct.location ?? [];
+        // Browsers refuse a redirect that names two different targets.
+        if (new Set(locations).size > 1) {
+          return {
+            ok: false,
+            status: "ERROR",
+            error: "Response has more than one Location header",
+          };
+        }
+        location = utf8(locations[0]);
+      }
+      // With no Location to follow, the page itself may send the visitor on.
+      const contentType = res.headers["content-type"] ?? "";
+      const plainHtml = isPlainHtml(contentType, res.headers["content-encoding"]);
+      const html = location === null && plainHtml ? await readHtml(res, contentType, signal) : null;
+      return { ok: true, statusCode, location, setCookies, challenge, refresh, html };
+    } finally {
+      res.destroy(); // nothing more is needed from this response
     }
-    // res.headers keeps only the first Location; headersDistinct keeps every copy.
-    const locations = res.headersDistinct.location ?? [];
-    // Browsers refuse a redirect that names two different targets.
-    if (new Set(locations).size > 1) {
-      return { ok: false, status: "ERROR", error: "Response has more than one Location header" };
-    }
-    const raw = locations[0];
-    // Node reads header bytes as latin1, browsers read Location as UTF-8.
-    const location = raw === undefined ? null : Buffer.from(raw, "latin1").toString("utf8");
-    return { ok: true, statusCode, location, setCookies, challenge };
   } catch (thrown) {
     // Object() makes a thrown null or string safe to read.
     const error = Object(thrown) as NodeJS.ErrnoException;
@@ -182,6 +206,47 @@ function approveIpLiteral(ip: string, lookup: LookupFunction, signal: AbortSigna
       else resolve();
     });
   });
+}
+
+/** text/html or XHTML, sent uncompressed as asked. A server that compresses anyway is not read. */
+function isPlainHtml(contentType: string, contentEncoding = "identity"): boolean {
+  const type = contentType.replace(/;.*/s, "").trim().toLowerCase(); // without "; charset=..."
+  const isHtml = type === "text/html" || type === "application/xhtml+xml";
+  return isHtml && contentEncoding.trim().toLowerCase() === "identity";
+}
+
+/**
+ * The page as text: at most MAX_HTML_SIZE bytes, decoded with the charset the server named.
+ * A page whose connection closes early is used as far as it arrived, as a browser shows it.
+ */
+async function readHtml(
+  res: IncomingMessage,
+  contentType: string,
+  signal: AbortSignal,
+): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  try {
+    for await (const chunk of res) {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size >= MAX_HTML_SIZE) break; // leaving the loop stops the download
+    }
+  } catch (error) {
+    if (signal.aborted) throw error; // a timeout or a cancel, not a page cut short
+  }
+  const bytes = Buffer.concat(chunks).subarray(0, MAX_HTML_SIZE);
+  const charset = /charset=["']?([^"';\s]+)/i.exec(contentType)?.[1];
+  try {
+    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder().decode(bytes); // a charset name TextDecoder does not know: use UTF-8
+  }
+}
+
+/** Node reads header bytes as latin1, but browsers read a URL in a header as UTF-8. */
+function utf8(raw: string | undefined): string | null {
+  return raw === undefined ? null : Buffer.from(raw, "latin1").toString("utf8");
 }
 
 function blocked(error: string): HopResult {

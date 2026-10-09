@@ -6,7 +6,7 @@ import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { fakeLookup, type Route, startMockServer } from "../../../tests/fixtures/mock-server.ts";
-import { requestHop } from "./index.ts";
+import { type HopResult, MAX_HTML_SIZE, requestHop } from "./index.ts";
 
 const REDIRECTS = [301, 302, 303, 307, 308];
 
@@ -14,6 +14,12 @@ const redirect =
   (status: number, location = "/go/abc"): Route =>
   (_req, res) => {
     res.writeHead(status, { location }).end();
+  };
+
+const page =
+  (contentType: string, body: string | Buffer, headers = {}, status = 200): Route =>
+  (_req, res) => {
+    res.writeHead(status, { "content-type": contentType, ...headers }).end(body);
   };
 
 /** Writes raw bytes, for responses Node's ServerResponse refuses to produce. */
@@ -51,6 +57,33 @@ const server = await startMockServer({
   "short.test/not-a-challenge": (_req, res) => {
     res.writeHead(403, { "cf-mitigated": "block" }).end();
   },
+  "short.test/html": page("text/html; charset=utf-8", "<p>café</p>"),
+  "short.test/xhtml": page("application/xhtml+xml", "<p>x</p>"),
+  "short.test/latin1": page("text/html; charset=iso-8859-1", Buffer.from("<p>café</p>", "latin1")),
+  "short.test/unknown-charset": page("text/html; charset=no-such-charset", "<p>café</p>"),
+  "short.test/plain": page("text/plain", "<p>not html</p>"),
+  "short.test/compressed": page("text/html", "\x1f\x8b not really gzip", {
+    "content-encoding": "gzip",
+  }),
+  "short.test/error-page": page("text/html", "<p>gone</p>", {}, 404),
+  "short.test/redirect-with-page": page("text/html", "<p>moved</p>", { location: "/next" }, 302),
+  "short.test/refresh": (_req, res) => {
+    // The UTF-8 bytes of "/café", which Node writes and reads back as latin1.
+    const url = Buffer.from("/café", "utf8").toString("latin1");
+    res.writeHead(200, { refresh: `0; url=${url}` }).end();
+  },
+  "short.test/huge-page": (_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.write("x".repeat(3 * MAX_HTML_SIZE)); // and never ends
+  },
+  "short.test/stalled-page": (_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.write("<p>first part"); // and never ends
+  },
+  // Promises 5000 bytes, sends 7 and closes the connection.
+  "short.test/cut-page": rawResponse(
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 5000\r\n\r\n<p>part",
+  ),
   // The UTF-8 bytes of "/café", which Node writes and reads back as latin1.
   "short.test/utf8": redirect(302, Buffer.from("/café", "utf8").toString("latin1")),
   "short.test/endless": (_req, res) => {
@@ -96,17 +129,15 @@ function hop(
 }
 
 /** What requestHop returns when the server answered. */
-const answered = (
-  statusCode: number,
-  location: string | null = null,
-  setCookies: string[] = [],
-  challenge = false,
-) => ({
+const answered = (statusCode: number, fields: Partial<Extract<HopResult, { ok: true }>> = {}) => ({
   ok: true,
   statusCode,
-  location,
-  setCookies,
-  challenge,
+  location: null,
+  setCookies: [],
+  challenge: false,
+  refresh: null,
+  html: null,
+  ...fields,
 });
 
 /** A security policy that refuses every name, the way the safe lookup refuses private addresses. */
@@ -163,7 +194,9 @@ const HIJACK_BLOCKED = {
 describe("requestHop: redirects", () => {
   it.each(REDIRECTS)("returns the Location of a %i without following it", async (status) => {
     const before = server.requests.length;
-    expect(await hop(server.url("short.test", `/r${status}`))).toEqual(answered(status, "/go/abc"));
+    expect(await hop(server.url("short.test", `/r${status}`))).toEqual(
+      answered(status, { location: "/go/abc" }),
+    );
     expect(server.requests.slice(before).map((req) => req.url)).toEqual([`/r${status}`]);
   });
 
@@ -176,7 +209,9 @@ describe("requestHop: redirects", () => {
   });
 
   it("decodes a UTF-8 Location the way browsers do", async () => {
-    expect(await hop(server.url("short.test", "/utf8"))).toEqual(answered(302, "/café"));
+    expect(await hop(server.url("short.test", "/utf8"))).toEqual(
+      answered(302, { location: "/café" }),
+    );
   });
 
   it("refuses a redirect that names two different targets", async () => {
@@ -188,12 +223,14 @@ describe("requestHop: redirects", () => {
   });
 
   it("accepts a repeated identical Location header", async () => {
-    expect(await hop(server.url("short.test", "/same-locations"))).toEqual(answered(302, "/a"));
+    expect(await hop(server.url("short.test", "/same-locations"))).toEqual(
+      answered(302, { location: "/a" }),
+    );
   });
 });
 
 describe("requestHop: the request itself", () => {
-  it("stops after the headers even when the body never ends", async () => {
+  it("stops after the headers when the body is not HTML, even if it never ends", async () => {
     expect(await hop(server.url("short.test", "/endless"))).toEqual(answered(200));
     await endlessBodyClosed; // resolves only once the server sees the connection close
   });
@@ -205,17 +242,19 @@ describe("requestHop: the request itself", () => {
     expect(req?.url).toBe("/p?q=1");
     expect(Object.keys(req?.headers ?? {}).sort()).toEqual([
       "accept",
+      "accept-encoding",
       "connection",
       "host",
       "user-agent",
     ]);
+    expect(req?.headers["accept-encoding"]).toBe("identity");
     expect(req?.headers["user-agent"]).toMatch(/^urlresolve /);
     expect(req?.headers.connection).toBe("close");
   });
 
   it("returns every Set-Cookie header", async () => {
     expect(await hop(server.url("short.test", "/cookies"))).toEqual(
-      answered(302, "/next", ["a=1; Path=/", "b=2; HttpOnly"]),
+      answered(302, { location: "/next", setCookies: ["a=1; Path=/", "b=2; HttpOnly"] }),
     );
   });
 
@@ -225,7 +264,7 @@ describe("requestHop: the request itself", () => {
     ["/not-a-challenge", 403, null, false],
   ])("reports a Cloudflare challenge on %s", async (path, status, location, challenge) => {
     expect(await hop(server.url("short.test", path))).toEqual(
-      answered(status, location, [], challenge),
+      answered(status, { location, challenge }),
     );
   });
 
@@ -247,6 +286,59 @@ describe("requestHop: the request itself", () => {
       net.setDefaultAutoSelectFamily(true);
     }
     expect(lookup.mock.calls[0]?.[1]).not.toHaveProperty("all", true);
+  });
+});
+
+describe("requestHop: reading the page", () => {
+  it.each([
+    ["/html", "<p>café</p>"],
+    ["/xhtml", "<p>x</p>"],
+    ["/latin1", "<p>café</p>"],
+    ["/unknown-charset", "<p>café</p>"], // falls back to UTF-8
+  ])("reads the HTML of %s", async (path, html) => {
+    expect(await hop(server.url("short.test", path))).toEqual(answered(200, { html }));
+  });
+
+  it("reads the HTML of an error page too", async () => {
+    expect(await hop(server.url("short.test", "/error-page"))).toEqual(
+      answered(404, { html: "<p>gone</p>" }),
+    );
+  });
+
+  it.each(["/plain", "/compressed"])("does not read %s, which is not plain HTML", async (path) => {
+    expect(await hop(server.url("short.test", path))).toEqual(answered(200));
+  });
+
+  it("does not read the page of a redirect", async () => {
+    expect(await hop(server.url("short.test", "/redirect-with-page"))).toEqual(
+      answered(302, { location: "/next" }),
+    );
+  });
+
+  it("returns the Refresh header, decoded like a Location", async () => {
+    expect(await hop(server.url("short.test", "/refresh"))).toEqual(
+      answered(200, { refresh: "0; url=/café" }),
+    );
+  });
+
+  it("stops reading a page at MAX_HTML_SIZE", async () => {
+    const result = await hop(server.url("short.test", "/huge-page"));
+    expect(result.ok && result.html?.length).toBe(MAX_HTML_SIZE);
+  });
+
+  it("times out on a page that never finishes", async () => {
+    const signal = AbortSignal.timeout(200);
+    expect(await hop(server.url("short.test", "/stalled-page"), fakeLookup, signal)).toEqual({
+      ok: false,
+      status: "TIMEOUT",
+      error: "Request timed out",
+    });
+  });
+
+  it("keeps the part of a page that arrived before the connection closed", async () => {
+    expect(await hop(server.url("short.test", "/cut-page"))).toEqual(
+      answered(200, { html: "<p>part" }),
+    );
   });
 });
 

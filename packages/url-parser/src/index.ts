@@ -45,9 +45,15 @@ export function parseInputUrl(input: string): ParseResult {
 
 /**
  * A redirect target resolved against the URL that sent it, the way a browser does it.
- * "example.com/x" is therefore a relative path, not a host.
+ * "example.com/x" is therefore a relative path, not a host. An HTTP redirect without its own
+ * #fragment keeps the original one (RFC 9110, section 10.2.2); a target taken from a page (a meta
+ * refresh, a link) does not, so pass { inheritFragment: false } for those.
  */
-export function resolveLocation(location: string, base: URL): ParseResult {
+export function resolveLocation(
+  location: string,
+  base: URL,
+  { inheritFragment = true } = {},
+): ParseResult {
   if (location.length > MAX_URL_LENGTH) return fail("ERROR", TOO_LONG, location);
   const url = URL.parse(location, base.href);
   if (url === null) return fail("ERROR", "Redirect target is not a valid URL", location);
@@ -56,8 +62,7 @@ export function resolveLocation(location: string, base: URL): ParseResult {
     const credentialsRemoved = removeCredentials(url); // before url.href is read
     return fail("BLOCKED", error, url.href, credentialsRemoved);
   }
-  // A redirect without its own #fragment keeps the original one (RFC 9110, section 10.2.2).
-  if (!location.includes("#")) url.hash = base.hash;
+  if (inheritFragment && !location.includes("#")) url.hash = base.hash;
   return withoutCredentials(url, "ERROR");
 }
 

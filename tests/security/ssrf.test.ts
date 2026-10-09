@@ -143,6 +143,12 @@ const go =
     res.writeHead(302, { location: location() }).end();
   };
 
+const page =
+  (body: () => string): Route =>
+  (_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" }).end(body());
+  };
+
 /** Where the refused redirects point. Each test checks that only its own first hop arrived. */
 const SECRET = "/secret";
 const port = () => server.port;
@@ -167,6 +173,23 @@ const server = await startMockServer({
   "public.test/to-internal-name": go(() => `http://intranet:${port()}${SECRET}`),
   "public.test/to-rebind": go(() => `http://rebind.test:${port()}/first`),
   "rebind.test/first": go(() => `http://rebind.test:${port()}${SECRET}`),
+  // Pages that point somewhere by themselves, instead of with an HTTP redirect.
+  "public.test/meta-to-localhost": page(
+    () => `<meta http-equiv="refresh" content="0;url=http://localhost:${port()}${SECRET}">`,
+  ),
+  "public.test/noscript-to-private": page(
+    () =>
+      `<noscript><meta http-equiv="refresh" content="0;url=http://10.0.0.1${SECRET}"></noscript>`,
+  ),
+  "public.test/header-to-metadata": (_req, res) => {
+    res.writeHead(200, { refresh: "0; url=http://169.254.169.254/latest/meta-data/" }).end();
+  },
+  "public.test/frame-to-private-name": page(
+    () => `<frameset><frame src="http://private.test:${port()}${SECRET}"></frameset>`,
+  ),
+  "public.test/out?u=http%3A%2F%2F127.0.0.2%2Fsecret": page(
+    () => '<a href="http://127.0.0.2/secret">Continue</a>',
+  ),
 });
 afterAll(() => server.close());
 
@@ -271,5 +294,50 @@ describe("every redirect goes through the same checks as the first URL", () => {
   it("never names the private address a host resolved to", async () => {
     const result = await resolveUrl(start("/to-private-name"), { lookup, timeoutMs: 2000 });
     expect(JSON.stringify(result)).not.toContain("10.0.0.7");
+  });
+});
+
+describe("every URL found in a page goes through the same checks", () => {
+  it.each([
+    [
+      "/meta-to-localhost",
+      `http://localhost:{port}${SECRET}`,
+      "localhost is a local or internal host name",
+      "meta-refresh",
+    ],
+    [
+      "/noscript-to-private",
+      `http://10.0.0.1${SECRET}`,
+      "10.0.0.1 is a private or reserved address",
+      "meta-refresh",
+    ],
+    [
+      "/header-to-metadata",
+      "http://169.254.169.254/latest/meta-data/",
+      "169.254.169.254 is a private or reserved address",
+      "meta-refresh",
+    ],
+    [
+      "/frame-to-private-name",
+      `http://private.test:{port}${SECRET}`,
+      "private.test resolves to a private or reserved address",
+      "html",
+    ],
+    [
+      "/out?u=http%3A%2F%2F127.0.0.2%2Fsecret",
+      "http://127.0.0.2/secret",
+      "127.0.0.2 is a private or reserved address",
+      "html",
+    ],
+  ])("blocks the target of %s", async (path, target, error, method) => {
+    const before = server.requests.length;
+    const result = await resolveUrl(start(path), { lookup, timeoutMs: 2000 });
+    expect(result).toMatchObject({
+      status: "BLOCKED",
+      error,
+      method,
+      chain: [start(path), target.replace("{port}", String(port()))],
+    });
+    expect(server.requests.slice(before).map((req) => req.url)).toEqual([path]);
   });
 });

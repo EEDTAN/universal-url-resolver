@@ -1,18 +1,29 @@
-import { type HopOptions, requestHop } from "@urlresolve/http-resolver";
+import { findHtmlTarget, refreshTarget } from "@urlresolve/html-resolver";
+import { type HopOptions, type HopResult, requestHop } from "@urlresolve/http-resolver";
 import { safeLookup } from "@urlresolve/security";
 import type { ResolveMethod, ResolveResult, ResolveStatus } from "@urlresolve/types";
 import { parseInputUrl, resolveLocation } from "@urlresolve/url-parser";
 import { CookieJar } from "./cookie-jar.ts";
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
-/** The same limit browsers use (Fetch standard). */
+/** The same limit browsers use (Fetch standard). It counts every hop, however it was found. */
 export const DEFAULT_MAX_REDIRECTS = 20;
 const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/** Resolver steps from lightest to heaviest, as in the spec's pipeline. */
+const METHOD_ORDER: ResolveMethod[] = [
+  "http",
+  "html",
+  "meta-refresh",
+  "javascript",
+  "browser",
+  "adapter",
+];
 
 export interface ResolveOptions {
   /** Time limit for the whole resolution, in milliseconds. Default 10 000. */
   timeoutMs?: number;
-  /** Most redirects to follow. Default 20. */
+  /** Most redirects to follow, whether HTTP, meta refresh or HTML. Default 20. */
   maxRedirects?: number;
   /** Stops the resolution early, for example when the user cancels it. */
   signal?: AbortSignal;
@@ -68,13 +79,13 @@ export async function resolveUrl(
 
   let url = parsed.url;
   const chain = [url.href];
+  let method: ResolveMethod | null = null;
   let httpStatus: number | null = null;
   let credentialsRemoved = parsed.credentialsRemoved;
   const cookies = new CookieJar();
   const requestsSent = new Set<string>();
 
   const finish = (status: ResolveStatus, error = ""): ResolveResult => {
-    const method: ResolveMethod | null = httpStatus === null ? null : "http";
     const fields = {
       method,
       redirectCount: chain.length - 1,
@@ -106,21 +117,62 @@ export async function resolveUrl(
     const hop = await requestHop(url, { lookup, signal, cookie });
     if (!hop.ok) return finish(hop.status, hop.error);
     httpStatus = hop.statusCode;
+    method ??= "http";
     cookies.store(url, hop.setCookies);
 
-    // Only a person can pass this check, and getting around it is not this project's job.
-    if (hop.challenge) return finish("UNRESOLVED", "Human verification required");
-    if (hop.location === null) {
-      // Nothing to follow. Only a 2xx answer is the page itself; a 3xx without a usable Location
-      // says the page is somewhere else without saying where, and 4xx/5xx are errors.
-      if (httpStatus >= 200 && httpStatus < 300) return finish("RESOLVED");
-      const detail = httpStatus >= 300 && httpStatus < 400 ? " without a redirect to follow" : "";
-      return finish("UNRESOLVED", `The server answered with HTTP ${httpStatus}${detail}`);
-    }
-    const next = resolveLocation(hop.location, url);
+    const step = nextStep(hop, url);
+    if (step.kind === "arrived") return finish("RESOLVED");
+    if (step.kind === "stop") return finish(step.status, step.error);
+    method = heavier(method, step.method);
+    // An HTTP redirect passes the #fragment of the link on (RFC 9110); a page's own links do not.
+    const next = resolveLocation(step.target, url, { inheritFragment: step.method === "http" });
     credentialsRemoved ||= next.credentialsRemoved;
     if (!next.ok) return finish(next.status, next.error);
     url = next.url;
     chain.push(url.href);
   }
+}
+
+type Step =
+  | { kind: "follow"; target: string; method: ResolveMethod }
+  | { kind: "stop"; status: Exclude<ResolveStatus, "RESOLVED">; error: string }
+  | { kind: "arrived" };
+
+const HUMAN_CHECK: Step = {
+  kind: "stop",
+  status: "UNRESOLVED",
+  error: "Human verification required",
+};
+
+/** What one answer means: go on to another URL, stop, or this page is the destination. */
+function nextStep(hop: Extract<HopResult, { ok: true }>, url: URL): Step {
+  // Only a person can pass this check, and getting around it is not this project's job.
+  if (hop.challenge) return HUMAN_CHECK;
+  if (hop.location !== null) return { kind: "follow", target: hop.location, method: "http" };
+
+  const ok = hop.statusCode >= 200 && hop.statusCode < 300;
+  // Like a browser: a Refresh header first, then what the page itself says.
+  const refresh = ok && hop.refresh !== null ? refreshTarget(hop.refresh, url) : null;
+  if (refresh !== null) return { kind: "follow", target: refresh, method: "meta-refresh" };
+  // An error page never sends anyone on; it is only read to see whether it asks for a person.
+  const page = hop.html === null ? null : findHtmlTarget(hop.html, url, { onlyHumanCheck: !ok });
+  if (page?.kind === "human-check") return HUMAN_CHECK;
+  if (!ok) {
+    // A 3xx without a usable Location says the page is elsewhere without saying where.
+    const detail =
+      hop.statusCode >= 300 && hop.statusCode < 400 ? " without a redirect to follow" : "";
+    const error = `The server answered with HTTP ${hop.statusCode}${detail}`;
+    return { kind: "stop", status: "UNRESOLVED", error };
+  }
+  if (page?.kind === "redirect") return { kind: "follow", target: page.url, method: page.method };
+  if (page?.kind === "needs-click") {
+    // Not the destination, but it only goes on when a person clicks (with JavaScript).
+    const error = "The page asks for a click to continue to another site";
+    return { kind: "stop", status: "UNRESOLVED", error };
+  }
+  return { kind: "arrived" };
+}
+
+function heavier(a: ResolveMethod, b: ResolveMethod): ResolveMethod {
+  return METHOD_ORDER.indexOf(a) > METHOD_ORDER.indexOf(b) ? a : b;
 }

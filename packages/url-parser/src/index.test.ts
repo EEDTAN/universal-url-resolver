@@ -263,6 +263,16 @@ describe("resolveLocation", () => {
     expect(href(result)).toBe(expected);
   });
 
+  it("does not pass the fragment on to a target taken from a page", () => {
+    const base = new URL("https://short.test/a#top");
+    expect(href(resolveLocation("/b", base, { inheritFragment: false }))).toBe(
+      "https://short.test/b",
+    );
+    expect(href(resolveLocation("/b#own", base, { inheritFragment: false }))).toBe(
+      "https://short.test/b#own",
+    );
+  });
+
   it.each([
     ["javascript:alert(1)", "javascript:"],
     ["data:text/html,x", "data:"],

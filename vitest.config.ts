@@ -10,8 +10,9 @@ export default defineConfig({
         functions: 90,
         statements: 90,
         branches: 85,
-        // Where untrusted input enters, and the network policy: every branch needs a test.
+        // Where untrusted input enters (URLs, pages), and the network policy: every branch needs a test.
         "packages/url-parser/src/**": { 100: true },
+        "packages/html-resolver/src/**": { 100: true },
         "packages/security/src/**": { 100: true },
       },
     },
