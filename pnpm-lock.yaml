@@ -217,6 +217,9 @@ importers:
       '@urlresolve/security':
         specifier: workspace:*
         version: link:../security
+      '@urlresolve/tracking':
+        specifier: workspace:*
+        version: link:../tracking
       '@urlresolve/types':
         specifier: workspace:*
         version: link:../types
@@ -249,6 +252,12 @@ importers:
         version: 8.19.0
 
   packages/security: {}
+
+  packages/tracking:
+    dependencies:
+      '@urlresolve/types':
+        specifier: workspace:*
+        version: link:../types
 
   packages/types: {}
 

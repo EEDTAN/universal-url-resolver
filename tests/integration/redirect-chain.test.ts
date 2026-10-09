@@ -45,6 +45,8 @@ const server = await startMockServer({
     ]),
   ),
   "dest.test/page": ok,
+  "short.test/tracked": go(() => at("dest.test", "/page?id=1&utm_source=mail&fbclid=abc")),
+  "dest.test/page?id=1&utm_source=mail&fbclid=abc": ok,
   "a.test/start": go(() => at("b.test", "/1")),
   "b.test/1": go(() => at("c.test", "/2")),
   "c.test/2": go(() => at("dest.test", "/page")),
@@ -130,8 +132,23 @@ describe("redirect chain", () => {
       httpStatus: 200,
       timing: { elapsedMs: expect.any(Number) },
       security: { credentialsRemoved: false },
-      tracking: null,
+      tracking: { cleanUrl: at("dest.test", "/page"), parameters: [] },
       error: null,
+    });
+  });
+
+  it("reports the final URL's tracking parameters, and the URL without them", async () => {
+    expect(await resolve(at("short.test", "/tracked"))).toMatchObject({
+      status: "RESOLVED",
+      finalUrl: at("dest.test", "/page?id=1&utm_source=mail&fbclid=abc"),
+      tracking: {
+        cleanUrl: at("dest.test", "/page?id=1"),
+        parameters: [
+          { name: "id", value: "1", kind: "functional" },
+          { name: "utm_source", value: "mail", kind: "tracking" },
+          { name: "fbclid", value: "abc", kind: "tracking" },
+        ],
+      },
     });
   });
 

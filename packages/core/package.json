@@ -8,6 +8,7 @@
     "@urlresolve/html-resolver": "workspace:*",
     "@urlresolve/http-resolver": "workspace:*",
     "@urlresolve/security": "workspace:*",
+    "@urlresolve/tracking": "workspace:*",
     "@urlresolve/types": "workspace:*",
     "@urlresolve/url-parser": "workspace:*"
   }

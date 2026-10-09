@@ -33,8 +33,21 @@ interface ResultFields {
   timing: { elapsedMs: number };
   /** credentialsRemoved: a URL contained user:password@ (a common phishing trick). It was never sent. */
   security: { credentialsRemoved: boolean };
-  /** Filled in by the tracking analyzer in a later phase. */
-  tracking: null;
+}
+
+/**
+ * What a query parameter is for. "tracking": it only says where the visit came from (utm_source,
+ * fbclid). "functional": it chooses what the page shows (id, q). "unknown": anything else, which
+ * may well matter to the page. Only tracking parameters are ever taken out.
+ */
+export type ParameterKind = "tracking" | "functional" | "unknown";
+
+/** The query parameters of the final URL. */
+export interface TrackingReport {
+  /** The final URL without its tracking parameters; the final URL itself when it has none. */
+  cleanUrl: string;
+  /** Every parameter in the final URL's query, in order, with name and value decoded. */
+  parameters: { name: string; value: string; kind: ParameterKind }[];
 }
 
 /**
@@ -75,12 +88,21 @@ export interface BrowserResolver {
   ): Promise<BrowserVisit>;
 }
 
-/** The JSON shown by the CLI, API and web UI. finalUrl is set exactly when status is "RESOLVED". */
+/**
+ * The JSON shown by the CLI, API and web UI. finalUrl and tracking are set exactly when status is
+ * "RESOLVED".
+ */
 export type ResolveResult =
-  | (ResultFields & { status: "RESOLVED"; finalUrl: string; error: null })
+  | (ResultFields & {
+      status: "RESOLVED";
+      finalUrl: string;
+      tracking: TrackingReport;
+      error: null;
+    })
   | (ResultFields & {
       status: Exclude<ResolveStatus, "RESOLVED">;
       finalUrl: null;
+      tracking: null;
       /** Why it failed, shown as `${status}: ${error}`, e.g. "BLOCKED: Destination resolves to private network". */
       error: string;
     });

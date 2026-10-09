@@ -1,6 +1,7 @@
 import { findHtmlTarget, refreshTarget } from "@urlresolve/html-resolver";
 import { type HopOptions, type HopResult, requestHop } from "@urlresolve/http-resolver";
 import { safeLookup } from "@urlresolve/security";
+import { analyzeTracking } from "@urlresolve/tracking";
 import type {
   BrowserResolver,
   ResolveMethod,
@@ -107,12 +108,19 @@ export async function resolveUrl(
       httpStatus,
       timing: { elapsedMs: elapsedMs() },
       security: { credentialsRemoved },
-      tracking: null,
     };
     // Keys in the order the JSON output shows them.
+    const originalUrl = parsed.url.href;
     return status === "RESOLVED"
-      ? { originalUrl: parsed.url.href, finalUrl: url.href, status, ...fields, error: null }
-      : { originalUrl: parsed.url.href, finalUrl: null, status, ...fields, error };
+      ? {
+          originalUrl,
+          finalUrl: url.href,
+          status,
+          ...fields,
+          tracking: analyzeTracking(url),
+          error: null,
+        }
+      : { originalUrl, finalUrl: null, status, ...fields, tracking: null, error };
   };
 
   for (;;) {
