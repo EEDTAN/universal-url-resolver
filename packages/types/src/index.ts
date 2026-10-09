@@ -18,12 +18,18 @@ interface ResultFields {
    * so it can differ from the exact text that was typed.
    */
   originalUrl: string;
-  /** The heaviest step that was needed; null when nothing was requested. */
+  /** The heaviest step that got an answer; null when no request was answered. */
   method: ResolveMethod | null;
-  /** Redirects followed: chain.length - 1, or 0 when chain is empty. */
+  /** Redirects in the chain: chain.length - 1, or 0 when chain is empty. */
   redirectCount: number;
-  /** Every URL in order, starting with originalUrl. Empty only for INVALID_URL. */
+  /**
+   * originalUrl, then every redirect target in order. The last entry is where resolution stopped.
+   * After a failure that can be a URL that was refused or never answered. Only http(s) URLs appear
+   * here: a redirect to any other scheme is described in `error` instead. Empty only for INVALID_URL.
+   */
   chain: string[];
+  /** Status code of the last HTTP response, or null when no response arrived. */
+  httpStatus: number | null;
   timing: { elapsedMs: number };
   /** credentialsRemoved: a URL contained user:password@ (a common phishing trick). It was never sent. */
   security: { credentialsRemoved: boolean };

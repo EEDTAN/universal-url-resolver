@@ -179,6 +179,17 @@ describe("parseInputUrl", () => {
     ["sftp://deploy:s3cr\\et@build.example/", "sftp://build.example/"],
     ["\u0000ftp://admin:s3cret@files.example/", "ftp://files.example/"],
     ["ht\ttp://admin:s3cret@exa mple.com/", "http://exa mple.com/"],
+    // A password with / ? # or \ in it stops the URL parser, so only the text is left to clean.
+    [
+      "https://AKIAEXAMPLE:s3cr/K7MDENG/bPxRfi@bucket.example.com/key",
+      "https://bucket.example.com/key",
+    ],
+    ["https://bob:s3cr?t@files.example.com/", "https://files.example.com/"],
+    ["https://bob:s3cr#t@files.example.com/", "https://files.example.com/"],
+    ["https://bob:s3cr\\t@files.example.com/", "https://files.example.com/"],
+    // Schemes whose path holds a whole URL: the parser sees no username there at all.
+    ["blob:https://admin:s3cret@files.example.com/x", "blob:files.example.com/x"],
+    ["view-source:https://admin:s3cret@files.example.com/", "view-source:files.example.com/"],
   ])("never echoes the password of the rejected input %j", (input, safeInput) => {
     const result = parseInputUrl(input);
     expect(result).toMatchObject({ ok: false, safeInput });
@@ -192,6 +203,20 @@ describe("parseInputUrl", () => {
       error: TOO_LONG,
       safeInput: "https://host.test/",
     });
+  });
+
+  it.each([
+    ["ftp://admin:s3cret@files.example/", true],
+    ["javascript://u:s3cret@x/", true],
+    [`https://u:s3cret@x.test/${"é".repeat(2000)}`, true],
+    // The parser never reads these, so it cannot tell.
+    ["http://admin:s3cret@exa mple.com/", false],
+    [`https://admin:${"p".repeat(9000)}@host.test/`, false],
+    // An opaque path has no username, whatever its "@" looks like.
+    ["mailto:someone@example.com", false],
+    ["javascript:alert(1)", false],
+  ])("reports credentialsRemoved for the rejected input %j", (input, credentialsRemoved) => {
+    expect(parseInputUrl(input)).toMatchObject({ ok: false, credentialsRemoved });
   });
 
   it("keeps safeInput within MAX_URL_LENGTH", () => {
@@ -273,11 +298,21 @@ describe("resolveLocation", () => {
     expect(href(result)).toBe("https://dest.test/");
   });
 
+  it.each([
+    ["ftp://user:s3cret@files.test/x", true],
+    [`https://u:s3cret@dest.test/${"é".repeat(2000)}`, true],
+    ["ftp://files.test/x", false],
+    ["http://[", false],
+  ])("reports credentialsRemoved for the rejected Location %j", (location, credentialsRemoved) => {
+    expect(resolveLocation(location, base)).toMatchObject({ ok: false, credentialsRemoved });
+  });
+
   // A tab inside a header value is legal, and the URL parser drops it; so must the redaction.
   it.each([
     ["ft\tp://user:s3cret@files.test/", "BLOCKED", "ftp://files.test/"],
     [" \u0000ftp://user:s3cret@files.test/", "BLOCKED", "ftp://files.test/"],
     ["tg://bot:s3cr\\et@resolve/", "BLOCKED", "tg://resolve/"],
+    ["blob:https://user:s3cret@files.test/", "BLOCKED", "blob:files.test/"],
     ["ht\ttp://user:s3cret@exa mple.test/", "ERROR", "http://exa mple.test/"],
   ])("never echoes the password of the rejected Location %j", (location, status, safeInput) => {
     const result = resolveLocation(location, base);

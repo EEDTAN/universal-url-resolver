@@ -39,6 +39,18 @@ const server = await startMockServer({
   "short.test/no-location": (_req, res) => {
     res.writeHead(302).end();
   },
+  "short.test/cookies": (_req, res) => {
+    res.writeHead(302, { location: "/next", "set-cookie": ["a=1; Path=/", "b=2; HttpOnly"] }).end();
+  },
+  "short.test/challenge": (_req, res) => {
+    res.writeHead(403, { "cf-mitigated": "challenge" }).end();
+  },
+  "short.test/challenge-redirect": (_req, res) => {
+    res.writeHead(302, { "cf-mitigated": "challenge", location: "/elsewhere" }).end();
+  },
+  "short.test/not-a-challenge": (_req, res) => {
+    res.writeHead(403, { "cf-mitigated": "block" }).end();
+  },
   // The UTF-8 bytes of "/café", which Node writes and reads back as latin1.
   "short.test/utf8": redirect(302, Buffer.from("/café", "utf8").toString("latin1")),
   "short.test/endless": (_req, res) => {
@@ -83,7 +95,21 @@ function hop(
   });
 }
 
-/** A security policy that refuses every name, the way Phase 2's safe lookup refuses private addresses. */
+/** What requestHop returns when the server answered. */
+const answered = (
+  statusCode: number,
+  location: string | null = null,
+  setCookies: string[] = [],
+  challenge = false,
+) => ({
+  ok: true,
+  statusCode,
+  location,
+  setCookies,
+  challenge,
+});
+
+/** A security policy that refuses every name, the way the safe lookup refuses private addresses. */
 const refuse: LookupFunction = (hostname, _options, callback) => {
   callback(Object.assign(new Error(`${hostname} is not allowed`), { code: "BLOCKED" }), "");
 };
@@ -137,36 +163,20 @@ const HIJACK_BLOCKED = {
 describe("requestHop: redirects", () => {
   it.each(REDIRECTS)("returns the Location of a %i without following it", async (status) => {
     const before = server.requests.length;
-    expect(await hop(server.url("short.test", `/r${status}`))).toEqual({
-      ok: true,
-      statusCode: status,
-      location: "/go/abc",
-    });
+    expect(await hop(server.url("short.test", `/r${status}`))).toEqual(answered(status, "/go/abc"));
     expect(server.requests.slice(before).map((req) => req.url)).toEqual([`/r${status}`]);
   });
 
   it.each([200, 201, 300])("ignores a Location header on a %i", async (status) => {
-    expect(await hop(server.url("short.test", `/s${status}`))).toEqual({
-      ok: true,
-      statusCode: status,
-      location: null,
-    });
+    expect(await hop(server.url("short.test", `/s${status}`))).toEqual(answered(status));
   });
 
   it("returns null for a redirect without a Location header", async () => {
-    expect(await hop(server.url("short.test", "/no-location"))).toEqual({
-      ok: true,
-      statusCode: 302,
-      location: null,
-    });
+    expect(await hop(server.url("short.test", "/no-location"))).toEqual(answered(302));
   });
 
   it("decodes a UTF-8 Location the way browsers do", async () => {
-    expect(await hop(server.url("short.test", "/utf8"))).toEqual({
-      ok: true,
-      statusCode: 302,
-      location: "/café",
-    });
+    expect(await hop(server.url("short.test", "/utf8"))).toEqual(answered(302, "/café"));
   });
 
   it("refuses a redirect that names two different targets", async () => {
@@ -178,21 +188,13 @@ describe("requestHop: redirects", () => {
   });
 
   it("accepts a repeated identical Location header", async () => {
-    expect(await hop(server.url("short.test", "/same-locations"))).toEqual({
-      ok: true,
-      statusCode: 302,
-      location: "/a",
-    });
+    expect(await hop(server.url("short.test", "/same-locations"))).toEqual(answered(302, "/a"));
   });
 });
 
 describe("requestHop: the request itself", () => {
   it("stops after the headers even when the body never ends", async () => {
-    expect(await hop(server.url("short.test", "/endless"))).toEqual({
-      ok: true,
-      statusCode: 200,
-      location: null,
-    });
+    expect(await hop(server.url("short.test", "/endless"))).toEqual(answered(200));
     await endlessBodyClosed; // resolves only once the server sees the connection close
   });
 
@@ -211,15 +213,36 @@ describe("requestHop: the request itself", () => {
     expect(req?.headers.connection).toBe("close");
   });
 
+  it("returns every Set-Cookie header", async () => {
+    expect(await hop(server.url("short.test", "/cookies"))).toEqual(
+      answered(302, "/next", ["a=1; Path=/", "b=2; HttpOnly"]),
+    );
+  });
+
+  it.each([
+    ["/challenge", 403, null, true],
+    ["/challenge-redirect", 302, "/elsewhere", true],
+    ["/not-a-challenge", 403, null, false],
+  ])("reports a Cloudflare challenge on %s", async (path, status, location, challenge) => {
+    expect(await hop(server.url("short.test", path))).toEqual(
+      answered(status, location, [], challenge),
+    );
+  });
+
+  it("sends the Cookie header it is given", async () => {
+    const signal = AbortSignal.timeout(2000);
+    const url = server.url("short.test", "/ok");
+    expect(await requestHop(url, { lookup: fakeLookup, signal, cookie: "a=1; b=2" })).toEqual(
+      answered(200),
+    );
+    expect(server.requests.at(-1)?.headers.cookie).toBe("a=1; b=2");
+  });
+
   it("works when Node asks the lookup for a single address (Happy Eyeballs off)", async () => {
     const lookup = vi.fn(fakeLookup);
     net.setDefaultAutoSelectFamily(false);
     try {
-      expect(await hop(server.url("short.test", "/ok"), lookup)).toEqual({
-        ok: true,
-        statusCode: 200,
-        location: null,
-      });
+      expect(await hop(server.url("short.test", "/ok"), lookup)).toEqual(answered(200));
     } finally {
       net.setDefaultAutoSelectFamily(true);
     }
@@ -230,22 +253,14 @@ describe("requestHop: the request itself", () => {
 describe("requestHop: security", () => {
   it("connects only through the lookup it was given", async () => {
     const lookup = vi.fn(fakeLookup);
-    expect(await hop(server.url("short.test", "/ok"), lookup)).toEqual({
-      ok: true,
-      statusCode: 200,
-      location: null,
-    });
+    expect(await hop(server.url("short.test", "/ok"), lookup)).toEqual(answered(200));
     // .test names never resolve in real DNS, so this request can only have used the fake answer.
     expect(lookup).toHaveBeenCalledWith("short.test", expect.anything(), expect.any(Function));
   });
 
   it.each(["127.0.0.1", "0x7f.1"])("passes the IP literal %s through the lookup", async (host) => {
     const lookup = vi.fn(fakeLookup);
-    expect(await hop(`http://${host}:${server.port}/ip`, lookup)).toEqual({
-      ok: true,
-      statusCode: 200,
-      location: null,
-    });
+    expect(await hop(`http://${host}:${server.port}/ip`, lookup)).toEqual(answered(200));
     expect(lookup).toHaveBeenCalledWith("127.0.0.1", expect.anything(), expect.any(Function));
   });
 
@@ -453,11 +468,7 @@ describe("requestHop: timeouts and failures", () => {
   });
 
   it("returns a bare 101 without upgrade headers as a normal status", async () => {
-    expect(await hop(server.url("short.test", "/bare101"))).toEqual({
-      ok: true,
-      statusCode: 101,
-      location: null,
-    });
+    expect(await hop(server.url("short.test", "/bare101"))).toEqual(answered(101));
   });
 
   it("rejects oversized response headers", async () => {

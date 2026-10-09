@@ -24,23 +24,37 @@ export interface HopOptions {
    * with an Error whose `code` is "BLOCKED": its message becomes the result's error. A successful
    * answer with no address counts as ENOTFOUND. Addresses are compared as text with the socket's
    * peer address, so return them the way Node prints them (dns.lookup and dns.Resolver already do).
-   * There is no default on purpose. The caller decides the policy (Phase 2 passes the safe lookup).
+   * There is no default on purpose: the caller decides the policy. @urlresolve/core passes
+   * safeLookup from @urlresolve/security, which only answers with public addresses.
    */
   lookup: LookupFunction;
   /** Stops the request. A "TimeoutError" reason (from AbortSignal.timeout) gives TIMEOUT. */
   signal: AbortSignal;
+  /** Value of the Cookie header, from the caller's cookie jar. Nothing is sent when it is empty. */
+  cookie?: string;
 }
 
 export type HopResult =
-  | { ok: true; statusCode: number; location: string | null }
+  | {
+      ok: true;
+      statusCode: number;
+      location: string | null;
+      setCookies: string[];
+      challenge: boolean;
+    }
   | { ok: false; status: "BLOCKED" | "TIMEOUT" | "ERROR"; error: string };
 
 /**
  * One GET request. It never follows redirects and never reads the body.
  * `location` is the raw Location header, set only for 301/302/303/307/308.
  * Turn it into a URL with resolveLocation() from @urlresolve/url-parser.
+ * `setCookies` holds the raw Set-Cookie headers, for the caller's cookie jar.
+ * `challenge` means the page wants a person to prove they are human (see below).
  */
-export async function requestHop(url: URL, { lookup, signal }: HopOptions): Promise<HopResult> {
+export async function requestHop(
+  url: URL,
+  { lookup, signal, cookie }: HopOptions,
+): Promise<HopResult> {
   if (!isHttpUrl(url)) {
     return blocked(`Refusing to request a "${url.protocol}" URL`);
   }
@@ -85,7 +99,7 @@ export async function requestHop(url: URL, { lookup, signal }: HopOptions): Prom
         lookup: checkedLookup,
         signal,
         // No accept-encoding: the body is never read.
-        headers: { "user-agent": USER_AGENT, accept: "*/*" },
+        headers: { "user-agent": USER_AGENT, accept: "*/*", ...(cookie ? { cookie } : {}) },
         // Set explicitly so that Node command-line flags and environment variables cannot loosen them.
         maxHeaderSize: 16 * 1024,
         insecureHTTPParser: false,
@@ -119,7 +133,13 @@ export async function requestHop(url: URL, { lookup, signal }: HopOptions): Prom
     res.destroy(); // the status and headers are all that is needed
 
     const statusCode = res.statusCode ?? 0;
-    if (!REDIRECT_STATUSES.has(statusCode)) return { ok: true, statusCode, location: null };
+    const setCookies = res.headers["set-cookie"] ?? [];
+    // Cloudflare's documented marker for its "verify you are human" page. Only a person can pass
+    // it, and this project never tries to get around one.
+    const challenge = res.headers["cf-mitigated"] === "challenge";
+    if (!REDIRECT_STATUSES.has(statusCode)) {
+      return { ok: true, statusCode, location: null, setCookies, challenge };
+    }
     // res.headers keeps only the first Location; headersDistinct keeps every copy.
     const locations = res.headersDistinct.location ?? [];
     // Browsers refuse a redirect that names two different targets.
@@ -129,7 +149,7 @@ export async function requestHop(url: URL, { lookup, signal }: HopOptions): Prom
     const raw = locations[0];
     // Node reads header bytes as latin1, browsers read Location as UTF-8.
     const location = raw === undefined ? null : Buffer.from(raw, "latin1").toString("utf8");
-    return { ok: true, statusCode, location };
+    return { ok: true, statusCode, location, setCookies, challenge };
   } catch (thrown) {
     // Object() makes a thrown null or string safe to read.
     const error = Object(thrown) as NodeJS.ErrnoException;

@@ -9,6 +9,11 @@ export type ParseResult =
       error: string;
       /** The input for display: any user:password part removed, cut to MAX_URL_LENGTH. Safe to show or log. */
       safeInput: string;
+      /**
+       * The URL parser found a username or password. Input it never read (empty, too long, not a URL)
+       * reports false, even when safeInput had a user:password-like part cut out.
+       */
+      credentialsRemoved: boolean;
     };
 
 const HAS_SCHEME = /^[a-z][a-z\d+.-]*:/i;
@@ -32,7 +37,8 @@ export function parseInputUrl(input: string): ParseResult {
   if (url === null) return fail("INVALID_URL", "Not a valid URL", text);
   if (!isHttpUrl(url)) {
     const error = `Only http and https links can be resolved (got "${url.protocol}")`;
-    return fail("INVALID_URL", error, hrefWithoutCredentials(url));
+    const credentialsRemoved = removeCredentials(url); // before url.href is read
+    return fail("INVALID_URL", error, url.href, credentialsRemoved);
   }
   return withoutCredentials(url, "INVALID_URL");
 }
@@ -47,7 +53,8 @@ export function resolveLocation(location: string, base: URL): ParseResult {
   if (url === null) return fail("ERROR", "Redirect target is not a valid URL", location);
   if (!isHttpUrl(url)) {
     const error = `Redirect to a "${url.protocol}" URL was not followed (only http and https)`;
-    return fail("BLOCKED", error, hrefWithoutCredentials(url));
+    const credentialsRemoved = removeCredentials(url); // before url.href is read
+    return fail("BLOCKED", error, url.href, credentialsRemoved);
   }
   // A redirect without its own #fragment keeps the original one (RFC 9110, section 10.2.2).
   if (!location.includes("#")) url.hash = base.hash;
@@ -58,38 +65,42 @@ export function resolveLocation(location: string, base: URL): ParseResult {
 // the signal: "https://paypal.com@evil.example/" is a classic phishing trick. MAX_URL_LENGTH is
 // checked again on the final href, because percent-encoding can make it much longer than the input.
 function withoutCredentials(url: URL, tooLongStatus: "INVALID_URL" | "ERROR"): ParseResult {
-  const credentialsRemoved = url.username !== "" || url.password !== "";
-  const href = hrefWithoutCredentials(url);
-  if (href.length > MAX_URL_LENGTH) return fail(tooLongStatus, TOO_LONG, href);
+  const credentialsRemoved = removeCredentials(url);
+  if (url.href.length > MAX_URL_LENGTH) {
+    return fail(tooLongStatus, TOO_LONG, url.href, credentialsRemoved);
+  }
   return { ok: true, url, credentialsRemoved };
 }
 
-function hrefWithoutCredentials(url: URL): string {
+/** Clears user:password from `url` and tells whether there was any. */
+function removeCredentials(url: URL): boolean {
+  const found = url.username !== "" || url.password !== "";
   url.username = "";
   url.password = "";
-  return url.href;
+  return found;
 }
 
 function fail(
   status: "INVALID_URL" | "BLOCKED" | "ERROR",
   error: string,
   text: string,
+  credentialsRemoved = false,
 ): ParseResult {
-  return { ok: false, status, error, safeInput: withoutUserinfo(text) };
+  return { ok: false, status, error, safeInput: withoutUserinfo(text), credentialsRemoved };
 }
 
-// Display only, so it also has to work on text the URL parser could not read.
-// After "scheme:" and its slashes, everything up to the first / \ ? or # is the host part, and
-// whatever sits before the last "@" in it is a username or password. It is removed before the
-// text is shortened, so a cut can never leave half a password behind.
+// Display only, so it also has to work on text the URL parser could not read. Everything between
+// "scheme:" (with its slashes) and the last "@" is removed, because it may be a username and
+// password, and a password can itself contain / ? # or \ ("https://key:a/b@host", or
+// "blob:https://user:pw@host"). This sometimes cuts more than needed from a rejected input; that
+// is fine, showing a password is not. It happens before the text is shortened, so a cut can never
+// leave half a password behind.
 function withoutUserinfo(input: string): string {
   const text = withoutIgnoredCharacters(input);
   let start = HAS_SCHEME.exec(text)?.[0].length ?? 0;
   while (text[start] === "/" || text[start] === "\\") start += 1;
-  const rest = text.slice(start);
-  const hostEnd = rest.search(/[/\\?#]/);
-  const hostPart = hostEnd === -1 ? rest : rest.slice(0, hostEnd);
-  const cleaned = text.slice(0, start) + rest.slice(hostPart.lastIndexOf("@") + 1);
+  const at = text.lastIndexOf("@");
+  const cleaned = at < start ? text : text.slice(0, start) + text.slice(at + 1);
   return cleaned.slice(0, MAX_URL_LENGTH);
 }
 

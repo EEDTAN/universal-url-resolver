@@ -172,6 +172,12 @@ importers:
       '@types/node':
         specifier: 24.19.1
         version: 24.19.1
+      '@urlresolve/core':
+        specifier: workspace:*
+        version: link:packages/core
+      '@urlresolve/security':
+        specifier: workspace:*
+        version: link:packages/security
       '@vitest/coverage-v8':
         specifier: 5.0.3
         version: 5.0.3(vitest@5.0.3)
@@ -182,11 +188,28 @@ importers:
         specifier: 5.0.3
         version: 5.0.3(@types/node@24.19.1)(@vitest/coverage-v8@5.0.3)(vite@8.3.3(@types/node@24.19.1))
 
+  packages/core:
+    dependencies:
+      '@urlresolve/http-resolver':
+        specifier: workspace:*
+        version: link:../http-resolver
+      '@urlresolve/security':
+        specifier: workspace:*
+        version: link:../security
+      '@urlresolve/types':
+        specifier: workspace:*
+        version: link:../types
+      '@urlresolve/url-parser':
+        specifier: workspace:*
+        version: link:../url-parser
+
   packages/http-resolver:
     dependencies:
       '@urlresolve/url-parser':
         specifier: workspace:*
         version: link:../url-parser
+
+  packages/security: {}
 
   packages/types: {}
 

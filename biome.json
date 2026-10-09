@@ -37,7 +37,12 @@
   },
   "overrides": [
     {
-      "includes": ["packages/http-resolver/src/index.ts", "tests/**", "**/*.test.ts"],
+      "includes": [
+        "packages/http-resolver/src/index.ts",
+        "packages/security/src/index.ts",
+        "tests/**",
+        "**/*.test.ts"
+      ],
       "linter": { "rules": { "style": { "noRestrictedImports": "off" } } }
     }
   ]
