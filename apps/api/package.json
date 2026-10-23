@@ -5,10 +5,10 @@
   "type": "module",
   "dependencies": {
     "@fastify/rate-limit": "11.2.1",
-    "@fastify/static": "10.1.5",
+    "@fastify/static": "10.1.6",
     "@urlresolve/browser-resolver": "workspace:*",
     "@urlresolve/core": "workspace:*",
     "@urlresolve/url-parser": "workspace:*",
-    "fastify": "5.12.5"
+    "fastify": "5.12.7"
   }
 }
