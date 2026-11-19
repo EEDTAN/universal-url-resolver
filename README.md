@@ -1,3 +1,5 @@
+[![Support me](https://img.shields.io/badge/%E2%99%A5%20Support%20me-ff5e5b?style=for-the-badge)](https://sociabuzz.com/ewrofficial/tribe)
+
 # Universal Shortlink Resolver
 
 [![Open a terminal in your browser](https://img.shields.io/badge/%E2%96%B6%20Open%20a%20terminal-in%20your%20browser-24292f?style=for-the-badge&logo=github)](https://codespaces.new/EEDTAN/universal-url-resolver)
